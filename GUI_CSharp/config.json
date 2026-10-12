@@ -1,0 +1,28 @@
+{
+    "desktop": {
+        "vibrance": 50
+    },
+    "auto_detect": false,
+    "games": {
+        "wininit.exe": {
+            "name": "wininit",
+            "vibrance_enabled": true,
+            "vibrance": 75,
+            "gamma_enabled": false,
+            "gamma": 1.8,
+            "boost_enabled": false,
+            "boost": 0
+        },
+        "cs2.exe": {
+            "name": "cs2",
+            "path": "D:/SteamLibrary/steamapps/common/Counter-Strike Global Offensive/game/bin/win64/cs2.exe",
+            "vibrance_enabled": true,
+            "vibrance": 75,
+            "gamma_enabled": false,
+            "gamma": 1.8,
+            "boost_enabled": false,
+            "boost": 0
+        }
+    },
+    "autostart": false
+}

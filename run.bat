@@ -1,3 +1,2 @@
 @echo off
-cd /d "%~dp0"
-start "" pythonw.exe main.py
+start "" "%~dp0GUI.exe"

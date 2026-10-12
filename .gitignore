@@ -6,3 +6,8 @@ err.txt
 out.txt
 .vscode/
 .idea/
+[Bb]in/
+[Oo]bj/
+*.pdb
+*.user
+GUI.exe
