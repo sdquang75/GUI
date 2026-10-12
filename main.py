@@ -1,446 +1,520 @@
 """
-Vibe Color Boost - Pure Software Game Profile Utility
-Built with the exact VibranceGUI automation mechanism:
-1. When game is in focus -> Apply In-Game Vibrance (e.g. 75%) + optional Gamma (1.8)
-2. When game is NOT in focus / Alt-Tab -> Revert to Windows Default (50% Vibrance + clean Gamma)
-3. On Reset / Exit -> Always guarantee 100% restore to Windows default (50% DVC + clean Gamma)
+Vibe Color & Gamer Profile Utility (vibranceGUI Architecture)
+Per-game profile manager with automated foreground detection:
+- Each game has its own independent profile (Vibrance, Gamma, Black Boost).
+- Auto-switches profile when game window is active.
+- Auto-reverts to Windows Desktop default (50% DVC + clean gamma) on Alt-Tab.
+- Config persistent in config.json.
+- Allows browsing .exe or picking directly from currently running games!
 """
 
 import sys
 import os
+import json
 import time
 import threading
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import psutil
 
 from color_engine import GammaEngine, UnifiedVibranceEngine
 
-PRESETS = {
-    "🌟 vibranceGUI (1:1)": {"vib_on": True, "vibrance": 75, "gamma_on": False, "gamma": 2.20, "boost_on": False, "boost": 0},
-    "⚡ FPS (Gamma 1.8)": {"vib_on": True, "vibrance": 75, "gamma_on": True, "gamma": 1.80, "boost_on": False, "boost": 0},
-    "🔦 Shadow Hunter": {"vib_on": True, "vibrance": 75, "gamma_on": True, "gamma": 1.80, "boost_on": True, "boost": 30},
-    "🔄 Reset Default": {"vib_on": True, "vibrance": 50, "gamma_on": False, "gamma": 2.20, "boost_on": False, "boost": 0},
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+DEFAULT_CONFIG = {
+    "desktop": {
+        "vibrance": 50
+    },
+    "auto_detect": True,
+    "games": {
+        "cs2.exe": {
+            "name": "Counter-Strike 2",
+            "vibrance_enabled": True,
+            "vibrance": 80,
+            "gamma_enabled": True,
+            "gamma": 1.80,
+            "boost_enabled": False,
+            "boost": 0
+        },
+        "valorant-win64-shipping.exe": {
+            "name": "VALORANT",
+            "vibrance_enabled": True,
+            "vibrance": 75,
+            "gamma_enabled": False,
+            "gamma": 2.20,
+            "boost_enabled": False,
+            "boost": 0
+        },
+        "r5reloaded.exe": {
+            "name": "Apex Legends",
+            "vibrance_enabled": True,
+            "vibrance": 75,
+            "gamma_enabled": True,
+            "gamma": 1.80,
+            "boost_enabled": True,
+            "boost": 25
+        }
+    }
 }
 
-DEFAULT_GAME_LIST = "cs2.exe, valorant.exe, valorant-win64-shipping.exe, apex.exe, overwatch.exe, pubg.exe, cod.exe, r5reloaded.exe"
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data
+        except Exception:
+            pass
+    return DEFAULT_CONFIG.copy()
+
+
+def save_config(cfg):
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print("Failed to save config:", e)
+
+
+class GameProfileDialog(tk.Toplevel):
+    """Dialog to create or edit a game profile."""
+    def __init__(self, parent, exe_name="", profile_data=None):
+        super().__init__(parent)
+        self.title("Game Profile Settings" if exe_name else "Add New Game")
+        self.geometry("500x560")
+        self.configure(bg="#18181b")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result = None
+        self.exe_name = exe_name
+        data = profile_data or {
+            "name": os.path.splitext(exe_name)[0] if exe_name else "New Game",
+            "vibrance_enabled": True,
+            "vibrance": 75,
+            "gamma_enabled": False,
+            "gamma": 1.80,
+            "boost_enabled": False,
+            "boost": 0
+        }
+
+        self.var_name = tk.StringVar(value=data.get("name", ""))
+        self.var_exe = tk.StringVar(value=exe_name)
+        self.var_vib_on = tk.BooleanVar(value=data.get("vibrance_enabled", True))
+        self.var_vib = tk.IntVar(value=data.get("vibrance", 75))
+        self.var_gamma_on = tk.BooleanVar(value=data.get("gamma_enabled", False))
+        self.var_gamma = tk.DoubleVar(value=data.get("gamma", 1.80))
+        self.var_boost_on = tk.BooleanVar(value=data.get("boost_enabled", False))
+        self.var_boost = tk.IntVar(value=data.get("boost", 0))
+
+        self._build_ui()
+
+    def _build_ui(self):
+        pad_frame = tk.Frame(self, bg="#18181b", padx=20, pady=16)
+        pad_frame.pack(fill="both", expand=True)
+
+        # Header info
+        tk.Label(pad_frame, text="Configure In-Game Profile", font=("Segoe UI", 12, "bold"), fg="#38bdf8", bg="#18181b").pack(anchor="w", pady=(0, 12))
+
+        # Game Name
+        tk.Label(pad_frame, text="Game Title:", font=("Segoe UI", 9, "bold"), fg="#e2e8f0", bg="#18181b").pack(anchor="w")
+        ent_name = tk.Entry(pad_frame, textvariable=self.var_name, font=("Segoe UI", 9), bg="#27272a", fg="#f8fafc", bd=0)
+        ent_name.pack(fill="x", pady=(2, 8), ipady=3)
+
+        # Executable
+        tk.Label(pad_frame, text="Process (.exe):", font=("Segoe UI", 9, "bold"), fg="#e2e8f0", bg="#18181b").pack(anchor="w")
+        row_exe = tk.Frame(pad_frame, bg="#18181b")
+        row_exe.pack(fill="x", pady=(2, 14))
+
+        ent_exe = tk.Entry(row_exe, textvariable=self.var_exe, font=("Segoe UI", 9), bg="#27272a", fg="#f8fafc", bd=0)
+        ent_exe.pack(side="left", fill="x", expand=True, ipady=3)
+
+        btn_browse = tk.Button(row_exe, text="Browse...", font=("Segoe UI", 8, "bold"), bg="#3f3f46", fg="#fff", bd=0, padx=8, command=self._browse_exe)
+        btn_browse.pack(side="right", padx=(6, 0))
+
+        # --- Digital Vibrance ---
+        box_vib = tk.LabelFrame(pad_frame, text="  Digital Vibrance (Hardware DVC)  ", font=("Segoe UI", 9, "bold"), fg="#f59e0b", bg="#18181b", bd=1, padx=12, pady=6)
+        box_vib.pack(fill="x", pady=(0, 10))
+
+        v_row = tk.Frame(box_vib, bg="#18181b")
+        v_row.pack(fill="x")
+        tk.Checkbutton(v_row, text="Enable Vibrance for this game", variable=self.var_vib_on, font=("Segoe UI", 8), fg="#cbd5e1", bg="#18181b", selectcolor="#27272a", activebackground="#18181b").pack(side="left")
+        self.lbl_v_val = tk.Label(v_row, text=f"{self.var_vib.get()}%", font=("Segoe UI", 8, "bold"), fg="#f59e0b", bg="#18181b")
+        self.lbl_v_val.pack(side="right")
+
+        scale_vib = tk.Scale(box_vib, from_=50, to=100, orient="horizontal", variable=self.var_vib, bg="#18181b", fg="#cbd5e1", highlightthickness=0, troughcolor="#27272a", activebackground="#f59e0b", showvalue=0, command=lambda v: self.lbl_v_val.config(text=f"{v}%"))
+        scale_vib.pack(fill="x", pady=(2, 4))
+
+        # --- Gamma ---
+        box_gam = tk.LabelFrame(pad_frame, text="  Custom Gamma (r_fullscreen_gamma)  ", font=("Segoe UI", 9, "bold"), fg="#38bdf8", bg="#18181b", bd=1, padx=12, pady=6)
+        box_gam.pack(fill="x", pady=(0, 10))
+
+        g_row = tk.Frame(box_gam, bg="#18181b")
+        g_row.pack(fill="x")
+        tk.Checkbutton(g_row, text="Enable Gamma (e.g. 1.80 for CS2)", variable=self.var_gamma_on, font=("Segoe UI", 8), fg="#cbd5e1", bg="#18181b", selectcolor="#27272a", activebackground="#18181b").pack(side="left")
+        self.lbl_g_val = tk.Label(g_row, text=f"{self.var_gamma.get():.2f}", font=("Segoe UI", 8, "bold"), fg="#38bdf8", bg="#18181b")
+        self.lbl_g_val.pack(side="right")
+
+        scale_gam = tk.Scale(box_gam, from_=1.40, to=2.40, resolution=0.05, orient="horizontal", variable=self.var_gamma, bg="#18181b", fg="#cbd5e1", highlightthickness=0, troughcolor="#27272a", activebackground="#38bdf8", showvalue=0, command=lambda v: self.lbl_g_val.config(text=f"{float(v):.2f}"))
+        scale_gam.pack(fill="x", pady=(2, 4))
+
+        # --- Black Boost ---
+        box_bst = tk.LabelFrame(pad_frame, text="  Black Boost (Shadow Equalizer)  ", font=("Segoe UI", 9, "bold"), fg="#22c55e", bg="#18181b", bd=1, padx=12, pady=6)
+        box_bst.pack(fill="x", pady=(0, 14))
+
+        b_row = tk.Frame(box_bst, bg="#18181b")
+        b_row.pack(fill="x")
+        tk.Checkbutton(b_row, text="Enable Black Boost (Nâng sáng góc tối)", variable=self.var_boost_on, font=("Segoe UI", 8), fg="#cbd5e1", bg="#18181b", selectcolor="#27272a", activebackground="#18181b").pack(side="left")
+        self.lbl_b_val = tk.Label(b_row, text=f"{self.var_boost.get()}%", font=("Segoe UI", 8, "bold"), fg="#22c55e", bg="#18181b")
+        self.lbl_b_val.pack(side="right")
+
+        scale_bst = tk.Scale(box_bst, from_=0, to=100, orient="horizontal", variable=self.var_boost, bg="#18181b", fg="#cbd5e1", highlightthickness=0, troughcolor="#27272a", activebackground="#22c55e", showvalue=0, command=lambda v: self.lbl_b_val.config(text=f"{v}%"))
+        scale_bst.pack(fill="x", pady=(2, 4))
+
+        # Buttons
+        btn_bar = tk.Frame(pad_frame, bg="#18181b")
+        pad_frame.pack_propagate(True)
+        btn_bar.pack(fill="x", side="bottom")
+
+        tk.Button(btn_bar, text="Save Profile", font=("Segoe UI", 9, "bold"), bg="#0284c7", fg="#fff", bd=0, padx=16, pady=6, cursor="hand2", command=self._on_save).pack(side="left")
+        tk.Button(btn_bar, text="Cancel", font=("Segoe UI", 9), bg="#3f3f46", fg="#fff", bd=0, padx=14, pady=6, cursor="hand2", command=self.destroy).pack(side="right")
+
+    def _browse_exe(self):
+        f = filedialog.askopenfilename(
+            parent=self,
+            title="Select Game Executable",
+            filetypes=[("Executable Files", "*.exe"), ("All Files", "*.*")]
+        )
+        if f:
+            exe = os.path.basename(f).lower()
+            self.var_exe.set(exe)
+            if not self.var_name.get() or self.var_name.get() == "New Game":
+                self.var_name.set(os.path.splitext(exe)[0].upper())
+
+    def _on_save(self):
+        exe = self.var_exe.get().strip().lower()
+        if not exe:
+            messagebox.showwarning("Validation Error", "Please specify an executable (.exe) name!", parent=self)
+            return
+        if not exe.endswith(".exe"):
+            exe += ".exe"
+
+        name = self.var_name.get().strip() or os.path.splitext(exe)[0]
+
+        self.result = (exe, {
+            "name": name,
+            "vibrance_enabled": self.var_vib_on.get(),
+            "vibrance": int(self.var_vib.get()),
+            "gamma_enabled": self.var_gamma_on.get(),
+            "gamma": round(float(self.var_gamma.get()), 2),
+            "boost_enabled": self.var_boost_on.get(),
+            "boost": int(self.var_boost.get())
+        })
+        self.destroy()
+
+
+class ProcessPickerModal(tk.Toplevel):
+    """Allows user to pick a running game process instead of digging through folders."""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Select Running Game Process")
+        self.geometry("450x400")
+        self.configure(bg="#18181b")
+        self.transient(parent)
+        self.grab_set()
+
+        self.selected_exe = None
+
+        tk.Label(self, text="Select an active game process:", font=("Segoe UI", 10, "bold"), fg="#38bdf8", bg="#18181b", padx=14, pady=10).pack(anchor="w")
+
+        # Treeview
+        frame_list = tk.Frame(self, bg="#18181b", padx=14)
+        frame_list.pack(fill="both", expand=True)
+
+        self.tree = ttk.Treeview(frame_list, columns=("exe", "name"), show="headings", height=10)
+        self.tree.heading("exe", text="Process (.exe)")
+        self.tree.heading("name", text="Window / Description")
+        self.tree.column("exe", width=160)
+        self.tree.column("name", width=240)
+        self.tree.pack(side="left", fill="both", expand=True)
+
+        sb = ttk.Scrollbar(frame_list, orient="vertical", command=self.tree.yview)
+        sb.pack(side="right", fill="y")
+        self.tree.configure(yscrollcommand=sb.set)
+
+        self._populate_processes()
+
+        btn_bar = tk.Frame(self, bg="#18181b", padx=14, pady=10)
+        btn_bar.pack(fill="x")
+
+        tk.Button(btn_bar, text="Choose Selected", font=("Segoe UI", 9, "bold"), bg="#0284c7", fg="#fff", bd=0, padx=12, pady=6, cursor="hand2", command=self._on_choose).pack(side="left")
+        tk.Button(btn_bar, text="Cancel", font=("Segoe UI", 9), bg="#3f3f46", fg="#fff", bd=0, padx=12, pady=6, cursor="hand2", command=self.destroy).pack(side="right")
+
+    def _populate_processes(self):
+        seen = set()
+        for p in psutil.process_iter(['name', 'exe']):
+            try:
+                name = p.info['name']
+                if name and name.lower() not in seen:
+                    exe_low = name.lower()
+                    if exe_low not in ("explorer.exe", "svchost.exe", "python.exe", "pythonw.exe", "taskhostw.exe", "cmd.exe", "conhost.exe"):
+                        seen.add(exe_low)
+                        self.tree.insert("", "end", values=(exe_low, p.info.get('name', '')))
+            except Exception:
+                pass
+
+    def _on_choose(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        vals = self.tree.item(sel[0], "values")
+        if vals:
+            self.selected_exe = vals[0]
+            self.destroy()
+
 
 class VibeColorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Vibe Color & Gamma Tuning (vibranceGUI Core)")
-        self.root.geometry("640x790")
+        self.root.title("Vibe Color & Gamer Profiles (vibranceGUI Style)")
+        self.root.geometry("680x760")
         self.root.configure(bg="#121214")
         self.root.resizable(False, False)
 
-        # Initialize Engines
+        self.cfg = load_config()
+
+        # Hardware engines
         self.gamma_engine = GammaEngine()
         self.nv_engine = UnifiedVibranceEngine()
 
-        # State tracking (VibranceGUI model)
-        self.is_in_game = False
-        self.manual_override = False
-        self.auto_detect_enabled = tk.BooleanVar(value=True)  # Enabled by default like vibranceGUI!
-        self.games_list_str = tk.StringVar(value=DEFAULT_GAME_LIST)
-
-        # Feature Toggles
-        self.toggle_vibrance = tk.BooleanVar(value=True)
-        self.toggle_gamma = tk.BooleanVar(value=False)
-        self.toggle_boost = tk.BooleanVar(value=False)
-
-        # Values
-        self.var_vibrance = tk.IntVar(value=75)
-        self.var_desktop_vib = tk.IntVar(value=50)  # Windows Desktop default
-        self.var_gamma = tk.DoubleVar(value=1.80)
-        self.var_boost = tk.DoubleVar(value=30.0)
+        # State tracking
+        self.current_active_game = None
+        self.auto_detect_enabled = tk.BooleanVar(value=self.cfg.get("auto_detect", True))
+        self.desktop_vib_var = tk.IntVar(value=self.cfg.get("desktop", {}).get("vibrance", 50))
 
         self._monitoring_active = True
 
+        self._setup_styles()
         self._build_ui()
+        self._refresh_games_tree()
         self._start_detector_thread()
+
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+    def _setup_styles(self):
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("Treeview",
+                        background="#18181b",
+                        foreground="#f8fafc",
+                        fieldbackground="#18181b",
+                        rowheight=28,
+                        font=("Segoe UI", 9))
+        style.configure("Treeview.Heading",
+                        background="#27272a",
+                        foreground="#38bdf8",
+                        font=("Segoe UI", 9, "bold"))
+        style.map("Treeview", background=[("selected", "#0284c7")])
+
     def _build_ui(self):
-        # Header
+        # 1. Header
         header = tk.Frame(self.root, bg="#18181b", height=70)
         header.pack(fill="x", side="top")
 
-        title_lbl = tk.Label(
-            header,
-            text="⚡ VIBE COLOR & GAMER PROFILE",
-            font=("Segoe UI", 15, "bold"),
-            fg="#38bdf8",
-            bg="#18181b"
-        )
-        title_lbl.pack(pady=(12, 2))
+        tk.Label(header, text="⚡ VIBE COLOR & GAMER PROFILES", font=("Segoe UI", 14, "bold"), fg="#38bdf8", bg="#18181b").pack(pady=(10, 2))
+        tk.Label(header, text="Per-Game Profiles  •  Auto Revert on Alt-Tab  •  Hardware DVC 1:1 vibranceGUI", font=("Segoe UI", 8), fg="#94a3b8", bg="#18181b").pack(pady=(0, 8))
 
-        sub_lbl = tk.Label(
-            header,
-            text="Exact vibranceGUI Mechanism  •  Auto Revert on Alt-Tab  •  Hardware DVC",
-            font=("Segoe UI", 9),
-            fg="#94a3b8",
-            bg="#18181b"
-        )
-        sub_lbl.pack(pady=(0, 10))
-
-        content = tk.Frame(self.root, bg="#121214", padx=24, pady=12)
+        content = tk.Frame(self.root, bg="#121214", padx=20, pady=12)
         content.pack(fill="both", expand=True)
 
-        # --- Quick Presets ---
-        preset_frame = tk.LabelFrame(
-            content,
-            text="  Quick Presets  ",
-            font=("Segoe UI", 10, "bold"),
-            fg="#e2e8f0",
-            bg="#18181b",
-            bd=1,
-            relief="groove",
-            padx=10,
-            pady=8
-        )
-        preset_frame.pack(fill="x", pady=(0, 10))
+        # 2. Windows Desktop Default Section (vibranceGUI model)
+        box_desk = tk.LabelFrame(content, text="  Windows / Desktop Default  ", font=("Segoe UI", 9, "bold"), fg="#e2e8f0", bg="#18181b", bd=1, padx=14, pady=8)
+        box_desk.pack(fill="x", pady=(0, 10))
 
-        p_btn_row = tk.Frame(preset_frame, bg="#18181b")
-        p_btn_row.pack(fill="x")
+        d_row = tk.Frame(box_desk, bg="#18181b")
+        d_row.pack(fill="x")
+        tk.Label(d_row, text="Desktop Vibrance Level (Applied outside of games):", font=("Segoe UI", 8), fg="#cbd5e1", bg="#18181b").pack(side="left")
+        self.lbl_desk_val = tk.Label(d_row, text=f"{self.desktop_vib_var.get()}% (Default)", font=("Segoe UI", 8, "bold"), fg="#38bdf8", bg="#18181b")
+        self.lbl_desk_val.pack(side="right")
 
-        for name, values in PRESETS.items():
-            btn = tk.Button(
-                p_btn_row,
-                text=name,
-                font=("Segoe UI", 9, "bold"),
-                bg="#27272a",
-                fg="#f8fafc",
-                activebackground="#38bdf8",
-                activeforeground="#000",
-                bd=0,
-                padx=6,
-                pady=6,
-                cursor="hand2",
-                command=lambda v=values: self.apply_preset(v)
-            )
-            btn.pack(side="left", expand=True, fill="x", padx=3)
+        self.scale_desk = tk.Scale(box_desk, from_=50, to=100, orient="horizontal", variable=self.desktop_vib_var, bg="#18181b", fg="#cbd5e1", highlightthickness=0, troughcolor="#27272a", activebackground="#38bdf8", showvalue=0, command=self._on_desktop_slider)
+        self.scale_desk.pack(fill="x", pady=(2, 0))
 
-        # --- Controls Box ---
-        ctrl_frame = tk.LabelFrame(
-            content,
-            text="  In-Game Settings (Active while playing)  ",
-            font=("Segoe UI", 10, "bold"),
-            fg="#e2e8f0",
-            bg="#18181b",
-            bd=1,
-            relief="groove",
-            padx=16,
-            pady=10
-        )
-        ctrl_frame.pack(fill="x", pady=(0, 10))
+        # 3. Game Profiles Section (Table / List)
+        box_games = tk.LabelFrame(content, text="  Configured Game Profiles  ", font=("Segoe UI", 9, "bold"), fg="#e2e8f0", bg="#18181b", bd=1, padx=12, pady=10)
+        box_games.pack(fill="both", expand=True, pady=(0, 10))
 
-        # 1. Digital Vibrance Section
-        v_hdr = tk.Frame(ctrl_frame, bg="#18181b")
-        v_hdr.pack(fill="x", pady=(2, 2))
-        chkVib = tk.Checkbutton(
-            v_hdr,
-            text="Digital Vibrance (In-game Saturation, revert to 50% on Alt-Tab)",
-            variable=self.toggle_vibrance,
-            font=("Segoe UI", 9, "bold"),
-            fg="#f59e0b",
-            bg="#18181b",
-            selectcolor="#27272a",
-            activebackground="#18181b",
-            activeforeground="#f59e0b",
-            command=self._on_control_change
-        )
-        chkVib.pack(side="left")
-        self.lbl_vib_val = tk.Label(v_hdr, text=f"{self.var_vibrance.get()}%", font=("Segoe UI", 9, "bold"), fg="#f59e0b", bg="#18181b")
-        self.lbl_vib_val.pack(side="right")
+        tree_frame = tk.Frame(box_games, bg="#18181b")
+        tree_frame.pack(fill="both", expand=True)
 
-        self.slider_vib = tk.Scale(
-            ctrl_frame,
-            from_=50,
-            to=100,
-            resolution=1,
-            orient="horizontal",
-            variable=self.var_vibrance,
-            bg="#18181b",
-            fg="#cbd5e1",
-            highlightthickness=0,
-            troughcolor="#27272a",
-            activebackground="#f59e0b",
-            showvalue=0,
-            command=self._on_control_change
-        )
-        self.slider_vib.pack(fill="x", pady=(0, 8))
+        self.tree = ttk.Treeview(tree_frame, columns=("name", "exe", "vib", "gamma", "boost"), show="headings", height=8)
+        self.tree.heading("name", text="Game Title")
+        self.tree.heading("exe", text="Process (.exe)")
+        self.tree.heading("vib", text="Vibrance")
+        self.tree.heading("gamma", text="Gamma")
+        self.tree.heading("boost", text="Black Boost")
 
-        # 2. Pure Gamma Section
-        g_hdr = tk.Frame(ctrl_frame, bg="#18181b")
-        g_hdr.pack(fill="x", pady=(2, 2))
-        chkGamma = tk.Checkbutton(
-            g_hdr,
-            text="Custom Gamma (Tương đương r_fullscreen_gamma CS2)",
-            variable=self.toggle_gamma,
-            font=("Segoe UI", 9, "bold"),
-            fg="#38bdf8",
-            bg="#18181b",
-            selectcolor="#27272a",
-            activebackground="#18181b",
-            activeforeground="#38bdf8",
-            command=self._on_control_change
-        )
-        chkGamma.pack(side="left")
-        self.lbl_gamma_val = tk.Label(g_hdr, text=f"{self.var_gamma.get():.2f}", font=("Segoe UI", 9, "bold"), fg="#38bdf8", bg="#18181b")
-        self.lbl_gamma_val.pack(side="right")
+        self.tree.column("name", width=160)
+        self.tree.column("exe", width=170)
+        self.tree.column("vib", width=90, anchor="center")
+        self.tree.column("gamma", width=90, anchor="center")
+        self.tree.column("boost", width=90, anchor="center")
+        self.tree.pack(side="left", fill="both", expand=True)
 
-        self.slider_gamma = tk.Scale(
-            ctrl_frame,
-            from_=1.40,
-            to=2.40,
-            resolution=0.05,
-            orient="horizontal",
-            variable=self.var_gamma,
-            bg="#18181b",
-            fg="#cbd5e1",
-            highlightthickness=0,
-            troughcolor="#27272a",
-            activebackground="#38bdf8",
-            showvalue=0,
-            command=self._on_control_change
-        )
-        self.slider_gamma.pack(fill="x", pady=(0, 8))
+        tree_sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        tree_sb.pack(side="right", fill="y")
+        self.tree.configure(yscrollcommand=tree_sb.set)
+        self.tree.bind("<Double-1>", lambda e: self.edit_selected_game())
 
-        # 3. Black Boost Section
-        b_hdr = tk.Frame(ctrl_frame, bg="#18181b")
-        b_hdr.pack(fill="x", pady=(2, 2))
-        chkBoost = tk.Checkbutton(
-            b_hdr,
-            text="Black Boost (Nâng sáng góc tối)",
-            variable=self.toggle_boost,
-            font=("Segoe UI", 8, "bold"),
-            fg="#22c55e",
-            bg="#18181b",
-            selectcolor="#27272a",
-            activebackground="#18181b",
-            activeforeground="#22c55e",
-            command=self._on_control_change
-        )
-        chkBoost.pack(side="left")
-        self.lbl_boost_val = tk.Label(b_hdr, text=f"{int(self.var_boost.get())}%", font=("Segoe UI", 9, "bold"), fg="#22c55e", bg="#18181b")
-        self.lbl_boost_val.pack(side="right")
+        # Buttons under Table
+        btn_row = tk.Frame(box_games, bg="#18181b")
+        btn_row.pack(fill="x", pady=(8, 0))
 
-        self.slider_boost = tk.Scale(
-            ctrl_frame,
-            from_=0,
-            to=100,
-            resolution=1,
-            orient="horizontal",
-            variable=self.var_boost,
-            bg="#18181b",
-            fg="#cbd5e1",
-            highlightthickness=0,
-            troughcolor="#27272a",
-            activebackground="#22c55e",
-            showvalue=0,
-            command=self._on_control_change
-        )
-        self.slider_boost.pack(fill="x", pady=(0, 4))
+        tk.Button(btn_row, text="➕ Add Game (.exe)", font=("Segoe UI", 8, "bold"), bg="#0284c7", fg="#fff", bd=0, padx=10, pady=5, cursor="hand2", command=self.add_game_manual).pack(side="left", padx=2)
+        tk.Button(btn_row, text="🎮 Add from Running", font=("Segoe UI", 8, "bold"), bg="#0369a1", fg="#fff", bd=0, padx=10, pady=5, cursor="hand2", command=self.add_game_from_process).pack(side="left", padx=2)
+        tk.Button(btn_row, text="✏️ Edit Profile", font=("Segoe UI", 8, "bold"), bg="#3f3f46", fg="#fff", bd=0, padx=10, pady=5, cursor="hand2", command=self.edit_selected_game).pack(side="left", padx=2)
+        tk.Button(btn_row, text="🗑️ Remove", font=("Segoe UI", 8, "bold"), bg="#dc2626", fg="#fff", bd=0, padx=10, pady=5, cursor="hand2", command=self.remove_selected_game).pack(side="right", padx=2)
 
-        # --- Visual Curve Graph ---
-        graph_box = tk.Frame(content, bg="#18181b", padx=10, pady=4)
-        graph_box.pack(fill="x", pady=(0, 10))
+        # 4. Status & Automation Controls
+        bot_box = tk.Frame(content, bg="#121214")
+        bot_box.pack(fill="x")
 
-        tk.Label(graph_box, text="Live Curve: [Gray = Normal 2.2]  [Cyan = Active Output]", font=("Segoe UI", 8), fg="#94a3b8", bg="#18181b").pack(anchor="w")
-        self.canvas_curve = tk.Canvas(graph_box, height=55, bg="#09090b", highlightthickness=1, highlightbackground="#27272a")
-        self.canvas_curve.pack(fill="x", pady=(2, 0))
+        status_box = tk.Frame(bot_box, bg="#18181b", bd=1, relief="groove", padx=12, pady=8)
+        status_box.pack(fill="x", pady=(0, 8))
 
-        # --- Automation Box (VibranceGUI style) ---
-        auto_frame = tk.LabelFrame(
-            content,
-            text="  Auto Game Detection (Cơ chế VibranceGUI)  ",
-            font=("Segoe UI", 10, "bold"),
-            fg="#e2e8f0",
-            bg="#18181b",
-            bd=1,
-            relief="groove",
-            padx=14,
-            pady=8
-        )
-        auto_frame.pack(fill="x", pady=(0, 10))
+        s_row = tk.Frame(status_box, bg="#18181b")
+        s_row.pack(fill="x")
 
-        chk_row = tk.Frame(auto_frame, bg="#18181b")
-        chk_row.pack(fill="x", pady=(0, 4))
+        tk.Checkbutton(s_row, text="Tự động áp dụng khi vào game & trả về mặc định khi Alt-Tab", variable=self.auto_detect_enabled, font=("Segoe UI", 9, "bold"), fg="#38bdf8", bg="#18181b", selectcolor="#27272a", activebackground="#18181b", command=self._on_auto_detect_change).pack(side="left")
 
-        chk = tk.Checkbutton(
-            chk_row,
-            text="Tự động kích hoạt khi vào game & trả về mặc định khi Alt-Tab",
-            variable=self.auto_detect_enabled,
-            font=("Segoe UI", 9, "bold"),
-            fg="#38bdf8",
-            bg="#18181b",
-            selectcolor="#27272a",
-            activebackground="#18181b",
-            activeforeground="#38bdf8",
-            command=self._on_auto_detect_toggle
-        )
-        chk.pack(side="left")
+        self.lbl_status = tk.Label(status_box, text="Current Display State: Desktop (50% Default)", font=("Segoe UI", 8, "italic"), fg="#94a3b8", bg="#18181b")
+        self.lbl_status.pack(anchor="w", pady=(4, 0))
 
-        self.status_lbl = tk.Label(
-            chk_row,
-            text="Status: Desktop (50% Default)",
-            font=("Segoe UI", 8, "italic"),
-            fg="#94a3b8",
-            bg="#18181b"
-        )
-        self.status_lbl.pack(side="right")
+        # Bottom manual triggers
+        act_row = tk.Frame(bot_box, bg="#121214")
+        act_row.pack(fill="x")
 
-        tk.Label(
-            auto_frame,
-            text="Danh sách file game (.exe):",
-            font=("Segoe UI", 8),
-            fg="#94a3b8",
-            bg="#18181b"
-        ).pack(anchor="w")
+        tk.Button(act_row, text="⚡ TEST SELECTED GAME PROFILE", font=("Segoe UI", 9, "bold"), bg="#0284c7", fg="#fff", bd=0, pady=7, cursor="hand2", command=self.test_selected_profile).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        tk.Button(act_row, text="🔄 RESET VỀ DESKTOP DEFAULT (50%)", font=("Segoe UI", 9, "bold"), bg="#334155", fg="#fff", bd=0, pady=7, cursor="hand2", command=self.reset_to_desktop).pack(side="right", expand=True, fill="x", padx=(4, 0))
 
-        entry_games = tk.Entry(
-            auto_frame,
-            textvariable=self.games_list_str,
-            font=("Segoe UI", 8),
-            bg="#27272a",
-            fg="#f8fafc",
-            insertbackground="#ffffff",
-            bd=0,
-            relief="flat"
-        )
-        entry_games.pack(fill="x", pady=(2, 0), ipady=3)
+    def _on_desktop_slider(self, val):
+        self.lbl_desk_val.config(text=f"{val}%")
+        self.cfg["desktop"]["vibrance"] = int(val)
+        save_config(self.cfg)
+        if self.current_active_game is None:
+            self.nv_engine.set_level(int(val))
 
-        # --- Main Action Buttons ---
-        btn_frame = tk.Frame(content, bg="#121214")
-        btn_frame.pack(fill="x")
-
-        self.btn_apply = tk.Button(
-            btn_frame,
-            text="⚡ TEST/FORCE GAME MODE",
-            font=("Segoe UI", 10, "bold"),
-            bg="#0284c7",
-            fg="#ffffff",
-            activebackground="#0369a1",
-            activeforeground="#ffffff",
-            bd=0,
-            pady=8,
-            cursor="hand2",
-            command=self.force_game_mode
-        )
-        self.btn_apply.pack(side="left", expand=True, fill="x", padx=(0, 6))
-
-        self.btn_restore = tk.Button(
-            btn_frame,
-            text="🔄 RESET VỀ MẶC ĐỊNH (50%)",
-            font=("Segoe UI", 10, "bold"),
-            bg="#334155",
-            fg="#ffffff",
-            activebackground="#1e293b",
-            activeforeground="#ffffff",
-            bd=0,
-            pady=8,
-            cursor="hand2",
-            command=self.reset_to_windows_default
-        )
-        self.btn_restore.pack(side="right", expand=True, fill="x", padx=(6, 0))
-
-        self._update_curve_canvas()
-
-    def _on_control_change(self, _=None):
-        self.lbl_gamma_val.config(text=f"{self.var_gamma.get():.2f}")
-        self.lbl_boost_val.config(text=f"{int(self.var_boost.get())}%")
-        self.lbl_vib_val.config(text=f"{self.var_vibrance.get()}%")
-        self._update_curve_canvas()
-
-        # If currently in game or manually forced, apply live!
-        if self.is_in_game or self.manual_override:
-            self.apply_ingame_settings()
-
-    def _on_auto_detect_toggle(self):
+    def _on_auto_detect_change(self):
+        self.cfg["auto_detect"] = self.auto_detect_enabled.get()
+        save_config(self.cfg)
         if not self.auto_detect_enabled.get():
-            self.manual_override = False
-            self.reset_to_windows_default()
+            self.reset_to_desktop()
 
-    def _update_curve_canvas(self):
-        self.canvas_curve.delete("all")
-        w = self.canvas_curve.winfo_width()
-        if w < 10:
-            w = 560
-        h = 55
-        padding = 5
+    def _refresh_games_tree(self):
+        self.tree.delete(*self.tree.get_children())
+        games = self.cfg.get("games", {})
+        for exe, prof in games.items():
+            vib_str = f"{prof.get('vibrance', 75)}%" if prof.get("vibrance_enabled", True) else "Off"
+            gam_str = f"{prof.get('gamma', 1.80):.2f}" if prof.get("gamma_enabled", False) else "Off (2.2)"
+            bst_str = f"{prof.get('boost', 0)}%" if prof.get("boost_enabled", False) else "Off"
+            self.tree.insert("", "end", iid=exe, values=(prof.get("name", exe), exe, vib_str, gam_str, bst_str))
 
-        pts_normal = []
-        pts_active = []
+    def add_game_manual(self):
+        dlg = GameProfileDialog(self.root)
+        self.root.wait_window(dlg)
+        if dlg.result:
+            exe, data = dlg.result
+            if "games" not in self.cfg:
+                self.cfg["games"] = {}
+            self.cfg["games"][exe] = data
+            save_config(self.cfg)
+            self._refresh_games_tree()
 
-        use_gamma = self.toggle_gamma.get()
-        use_boost = self.toggle_boost.get()
-        gamma = self.var_gamma.get() if use_gamma else 2.20
-        boost = (self.var_boost.get() / 100.0) if use_boost else 0.0
-        base_p = gamma / 2.2
+    def add_game_from_process(self):
+        picker = ProcessPickerModal(self.root)
+        self.root.wait_window(picker)
+        if picker.selected_exe:
+            dlg = GameProfileDialog(self.root, exe_name=picker.selected_exe)
+            self.root.wait_window(dlg)
+            if dlg.result:
+                exe, data = dlg.result
+                if "games" not in self.cfg:
+                    self.cfg["games"] = {}
+                self.cfg["games"][exe] = data
+                save_config(self.cfg)
+                self._refresh_games_tree()
 
-        num_steps = 60
-        for step in range(num_steps + 1):
-            x = step / float(num_steps)
-            cx = padding + x * (w - 2 * padding)
+    def edit_selected_game(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Select Game", "Please select a game from the list to edit.", parent=self.root)
+            return
+        exe = sel[0]
+        data = self.cfg.get("games", {}).get(exe)
+        dlg = GameProfileDialog(self.root, exe_name=exe, profile_data=data)
+        self.root.wait_window(dlg)
+        if dlg.result:
+            new_exe, new_data = dlg.result
+            if new_exe != exe and exe in self.cfg.get("games", {}):
+                del self.cfg["games"][exe]
+            self.cfg["games"][new_exe] = new_data
+            save_config(self.cfg)
+            self._refresh_games_tree()
 
-            # Normal 2.2
-            y_norm = x
-            cy_norm = (h - padding) - y_norm * (h - 2 * padding)
-            pts_normal.extend([cx, cy_norm])
+    def remove_selected_game(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        exe = sel[0]
+        if messagebox.askyesno("Confirm Delete", f"Remove profile for '{exe}'?", parent=self.root):
+            if exe in self.cfg.get("games", {}):
+                del self.cfg["games"][exe]
+                save_config(self.cfg)
+                self._refresh_games_tree()
 
-            # Active Curve
-            lift = (1.0 - x) ** 2 * (x ** 0.6) * 1.5 * boost if (x > 0 and use_boost) else 0.0
-            y_act = (x ** base_p) + lift if x > 0 else 0.0
-            y_act = max(0.0, min(1.0, y_act))
-            cy_act = (h - padding) - y_act * (h - 2 * padding)
-            pts_active.extend([cx, cy_act])
-
-        self.canvas_curve.create_line(pts_normal, fill="#475569", width=1, dash=(3, 3))
-        self.canvas_curve.create_line(pts_active, fill="#06b6d4", width=2)
-
-    def apply_preset(self, p):
-        self.toggle_vibrance.set(p["vib_on"])
-        self.var_vibrance.set(p["vibrance"])
-        self.toggle_gamma.set(p["gamma_on"])
-        self.var_gamma.set(p["gamma"])
-        self.toggle_boost.set(p["boost_on"])
-        self.var_boost.set(p["boost"])
-        self._on_control_change()
-        self.force_game_mode()
-
-    def apply_ingame_settings(self):
-        """Applies In-Game Vibrance and Gamma."""
+    def apply_game_profile(self, exe, prof):
         # 1. Vibrance
-        if self.toggle_vibrance.get():
-            self.nv_engine.set_level(self.var_vibrance.get())
+        if prof.get("vibrance_enabled", True):
+            self.nv_engine.set_level(prof.get("vibrance", 75))
         else:
-            self.nv_engine.set_level(50)
+            self.nv_engine.set_level(self.desktop_vib_var.get())
 
         # 2. Gamma & Boost
-        use_gamma = self.toggle_gamma.get()
-        use_boost = self.toggle_boost.get()
+        use_gamma = prof.get("gamma_enabled", False)
+        use_boost = prof.get("boost_enabled", False)
         if use_gamma or use_boost:
-            g = self.var_gamma.get() if use_gamma else 2.20
-            b = (self.var_boost.get() / 100.0) if use_boost else 0.0
+            g = prof.get("gamma", 1.80) if use_gamma else 2.20
+            b = (prof.get("boost", 0) / 100.0) if use_boost else 0.0
             self.gamma_engine.apply_curve(gamma=g, black_boost=b)
         else:
             self.gamma_engine.restore()
 
-    def reset_to_windows_default(self):
-        """Forces 100% restoration to clean Windows defaults (50% DVC + linear gamma)."""
-        self.manual_override = False
-        self.is_in_game = False
-        self.nv_engine.set_level(50)
-        self.gamma_engine.restore()
-        self.status_lbl.config(text="Status: Desktop (50% Default)", fg="#94a3b8")
-        self.btn_apply.config(bg="#0284c7", text="⚡ TEST/FORCE GAME MODE")
+        self.current_active_game = exe
+        self.lbl_status.config(
+            text=f"Active Game: {prof.get('name', exe)} ({exe}) [Vibrance: {prof.get('vibrance', 75)}%]",
+            fg="#10b981"
+        )
 
-    def force_game_mode(self):
-        """Manually forces in-game settings for testing."""
-        self.manual_override = True
-        self.apply_ingame_settings()
-        self.status_lbl.config(text="Status: In-Game Active (Manual)", fg="#10b981")
-        self.btn_apply.config(bg="#10b981", text="✔ GAME MODE ACTIVE")
+    def reset_to_desktop(self):
+        self.current_active_game = None
+        self.nv_engine.set_level(self.desktop_vib_var.get())
+        self.gamma_engine.restore()
+        self.lbl_status.config(
+            text=f"Current Display State: Desktop ({self.desktop_vib_var.get()}% Default)",
+            fg="#94a3b8"
+        )
+
+    def test_selected_profile(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Select Game", "Please select a game to test its profile.", parent=self.root)
+            return
+        exe = sel[0]
+        prof = self.cfg.get("games", {}).get(exe)
+        if prof:
+            self.apply_game_profile(exe, prof)
 
     def _start_detector_thread(self):
         t = threading.Thread(target=self._monitor_loop, daemon=True)
@@ -452,11 +526,13 @@ class VibeColorApp:
 
         while self._monitoring_active:
             try:
-                # If in-game and custom gamma is on, enforce against DirectX wipes
-                if (self.is_in_game or self.manual_override) and (self.toggle_gamma.get() or self.toggle_boost.get()):
-                    self.gamma_engine.enforce_if_needed()
+                # If active game profile has custom gamma, enforce in case DirectX wiped it
+                if self.current_active_game:
+                    prof = self.cfg.get("games", {}).get(self.current_active_game)
+                    if prof and (prof.get("gamma_enabled") or prof.get("boost_enabled")):
+                        self.gamma_engine.enforce_if_needed()
 
-                if self.auto_detect_enabled.get() and not self.manual_override:
+                if self.auto_detect_enabled.get():
                     hwnd = user32.GetForegroundWindow()
                     fg_name = None
                     if hwnd:
@@ -469,19 +545,16 @@ class VibeColorApp:
                             except Exception:
                                 pass
 
-                    games = [g.strip().lower() for g in self.games_list_str.get().split(",") if g.strip()]
-                    is_match = fg_name in games if fg_name else False
+                    games = self.cfg.get("games", {})
+                    matched_exe = fg_name if (fg_name and fg_name in games) else None
 
-                    if is_match and not self.is_in_game:
-                        # Entered game!
-                        self.is_in_game = True
-                        self.root.after(0, self.apply_ingame_settings)
-                        self.root.after(0, lambda n=fg_name: self.status_lbl.config(text=f"Active Game: {n}", fg="#10b981"))
-                        self.root.after(0, lambda: self.btn_apply.config(bg="#10b981", text="✔ IN-GAME ACTIVE"))
-                    elif not is_match and self.is_in_game:
-                        # Left game (Alt-Tab to Desktop/Chrome/etc.) -> REVERT IMMEDIATELY!
-                        self.is_in_game = False
-                        self.root.after(0, self.reset_to_windows_default)
+                    if matched_exe and matched_exe != self.current_active_game:
+                        # Entered a configured game!
+                        prof = games[matched_exe]
+                        self.root.after(0, lambda e=matched_exe, p=prof: self.apply_game_profile(e, p))
+                    elif not matched_exe and self.current_active_game is not None:
+                        # Tabbed out to Desktop / Browser / Discord -> Revert to desktop default!
+                        self.root.after(0, self.reset_to_desktop)
 
             except Exception:
                 pass
@@ -490,7 +563,7 @@ class VibeColorApp:
 
     def on_closing(self):
         self._monitoring_active = False
-        self.reset_to_windows_default()
+        self.reset_to_desktop()
         self.root.destroy()
 
 
