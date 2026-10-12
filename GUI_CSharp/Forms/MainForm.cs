@@ -37,6 +37,7 @@ namespace GUI.Forms
         private Button _btnApplyCustom;
         private Button _btnOpenGpuPanel;
         private Label _lblResStatus;
+        private Button _btnOpenUtility;
         private Button _btnOpenMonitors;
 
         private static readonly (int Width, int Height)[] QuickResolutions = new[]
@@ -388,13 +389,30 @@ namespace GUI.Forms
             this.Controls.Add(gbQuickRes);
 
             // ==========================================
-            // 3. BOTTOM RIGHT: Small "Monitors" button
+            // 3. BOTTOM RIGHT: "Utility" and "Monitors" buttons
             // ==========================================
+            _btnOpenUtility = new Button
+            {
+                Text = "🛠️ Utility",
+                Location = new Point(rightX + colW - 248, 462),
+                Size = new Size(118, 28),
+                BackColor = Color.White,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
+                FlatStyle = FlatStyle.System
+            };
+            _btnOpenUtility.Click += (s, e) =>
+            {
+                using var dlg = new UtilityForm();
+                dlg.ShowDialog(this);
+                RefreshCurrentResolution();
+            };
+            this.Controls.Add(_btnOpenUtility);
+
             _btnOpenMonitors = new Button
             {
                 Text = "🖥️ Monitors",
-                Location = new Point(rightX + colW - 120, 462),
-                Size = new Size(120, 28),
+                Location = new Point(rightX + colW - 122, 462),
+                Size = new Size(122, 28),
                 BackColor = Color.White,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
                 FlatStyle = FlatStyle.System
