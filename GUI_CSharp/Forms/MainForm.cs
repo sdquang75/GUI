@@ -513,12 +513,14 @@ namespace GUI.Forms
             _lvGames.BeginUpdate();
             _lvGames.Items.Clear();
 
+            var oldImageList = _lvGames.LargeImageList;
             var newImageList = new ImageList
             {
-                ImageSize = new Size(48, 48),
-                ColorDepth = ColorDepth.Depth32Bit
+                ColorDepth = ColorDepth.Depth32Bit,
+                ImageSize = new Size(48, 48)
             };
 
+            var items = new List<ListViewItem>();
             int index = 0;
             foreach (var kvp in _config.Games)
             {
@@ -532,14 +534,18 @@ namespace GUI.Forms
                 var item = new ListViewItem(label)
                 {
                     ImageIndex = index,
+                    ImageKey = exeKey,
                     Tag = exeKey
                 };
-                _lvGames.Items.Add(item);
+                items.Add(item);
                 index++;
             }
 
             _lvGames.LargeImageList = newImageList;
+            _lvGames.Items.AddRange(items.ToArray());
             _lvGames.EndUpdate();
+
+            oldImageList?.Dispose();
         }
 
         private void OnAddFromRunning()

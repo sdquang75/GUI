@@ -92,12 +92,18 @@ namespace GUI.Forms
                 try
                 {
                     string name = (p.ProcessName + ".exe").ToLowerInvariant();
-                    if (!seen.Contains(name) && Array.IndexOf(ignored, name) < 0)
+                    if (Array.IndexOf(ignored, name) >= 0) continue;
+
+                    string path = Utils.ProcessHelper.GetProcessPath(p.Id);
+                    if (!seen.Contains(name))
                     {
                         seen.Add(name);
-                        string path = Utils.ProcessHelper.GetProcessPath(p.Id);
                         _procMap[name] = path;
                         _listBox.Items.Add(name);
+                    }
+                    else if (!string.IsNullOrEmpty(path) && (!_procMap.TryGetValue(name, out var existing) || string.IsNullOrEmpty(existing)))
+                    {
+                        _procMap[name] = path;
                     }
                 }
                 catch { }
