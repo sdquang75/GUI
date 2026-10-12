@@ -146,15 +146,38 @@ namespace GUI.Utils
             if (_cachedAppIcon != null) return _cachedAppIcon;
             try
             {
-                using var bmp = (Bitmap)CreateBadge("GUI", 32);
-                IntPtr hIcon = bmp.GetHicon();
-                _cachedAppIcon = Icon.FromHandle(hIcon);
-                return _cachedAppIcon;
+                // 1. Try embedded app.ico from assembly
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                using var stream = asm.GetManifestResourceStream("GUI.app.ico");
+                if (stream != null)
+                {
+                    _cachedAppIcon = new Icon(stream);
+                    return _cachedAppIcon;
+                }
+
+                // 2. Try local app.ico
+                string localIco = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
+                if (File.Exists(localIco))
+                {
+                    _cachedAppIcon = new Icon(localIco);
+                    return _cachedAppIcon;
+                }
+
+                // 3. Try extract from exe
+                string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (File.Exists(exePath))
+                {
+                    var ico = Icon.ExtractAssociatedIcon(exePath);
+                    if (ico != null)
+                    {
+                        _cachedAppIcon = ico;
+                        return _cachedAppIcon;
+                    }
+                }
             }
-            catch
-            {
-                return SystemIcons.Application;
-            }
+            catch { }
+
+            return SystemIcons.Application;
         }
 
         public static Image CreateBadge(string exeName, int size)

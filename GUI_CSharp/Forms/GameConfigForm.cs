@@ -3,6 +3,7 @@ using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
 using GUI.Config;
+using GUI.Engine;
 
 namespace GUI.Forms
 {
@@ -10,6 +11,11 @@ namespace GUI.Forms
     {
         private readonly string _exeName;
         private readonly GameProfile _profile;
+        private readonly IVibranceEngine? _vibrance;
+        private readonly GammaEngine? _gammaEngine;
+
+        private bool _isTesting = false;
+        private int _prevVibranceLevel = 50;
 
         private TrackBar _tbVibrance;
         private Label _lblVibranceVal;
@@ -23,13 +29,17 @@ namespace GUI.Forms
         private Label _lblBoostVal;
 
         private Button _btnSave;
+        private Button _btnTest;
         private Button _btnCancel;
 
         public GameProfile ResultProfile { get; private set; }
 
-        public GameConfigForm(string exeName, GameProfile? initialProfile = null)
+        public GameConfigForm(string exeName, GameProfile? initialProfile = null, IVibranceEngine? vibrance = null, GammaEngine? gamma = null)
         {
             _exeName = exeName;
+            _vibrance = vibrance;
+            _gammaEngine = gamma;
+
             _profile = initialProfile ?? new GameProfile
             {
                 Name = Path.GetFileNameWithoutExtension(exeName),
@@ -44,16 +54,25 @@ namespace GUI.Forms
 
             InitializeComponent();
             LoadProfileData();
+
+            this.FormClosing += (s, e) =>
+            {
+                if (_isTesting)
+                {
+                    RevertPreview();
+                    _isTesting = false;
+                }
+            };
         }
 
         private void InitializeComponent()
         {
             this.Text = _exeName;
-            this.Size = new Size(360, 420);
+            this.Size = new Size(360, 400);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
-            this.StartPosition = FormStartPosition.CenterScreen;
+            this.StartPosition = FormStartPosition.CenterParent;
             this.BackColor = Color.FromArgb(240, 240, 240);
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.Icon = Utils.IconHelper.GetAppIcon();
@@ -85,7 +104,11 @@ namespace GUI.Forms
                 Location = new Point(10, 32),
                 Size = new Size(296, 35)
             };
-            _tbVibrance.ValueChanged += (s, e) => _lblVibranceVal.Text = $"{_tbVibrance.Value}%";
+            _tbVibrance.ValueChanged += (s, e) =>
+            {
+                _lblVibranceVal.Text = $"{_tbVibrance.Value}%";
+                if (_isTesting) ApplyPreview();
+            };
 
             gbVib.Controls.Add(_lblVibranceVal);
             gbVib.Controls.Add(_tbVibrance);
@@ -105,6 +128,10 @@ namespace GUI.Forms
                 Location = new Point(12, 22),
                 AutoSize = true
             };
+            _chkGamma.CheckedChanged += (s, e) =>
+            {
+                if (_isTesting) ApplyPreview();
+            };
 
             _lblGammaVal = new Label
             {
@@ -123,7 +150,11 @@ namespace GUI.Forms
                 Location = new Point(10, 48),
                 Size = new Size(296, 35)
             };
-            _tbGamma.ValueChanged += (s, e) => _lblGammaVal.Text = $"{(_tbGamma.Value / 100.0):0.00}";
+            _tbGamma.ValueChanged += (s, e) =>
+            {
+                _lblGammaVal.Text = $"{(_tbGamma.Value / 100.0):0.00}";
+                if (_isTesting) ApplyPreview();
+            };
 
             gbGamma.Controls.Add(_chkGamma);
             gbGamma.Controls.Add(_lblGammaVal);
@@ -144,6 +175,10 @@ namespace GUI.Forms
                 Location = new Point(12, 22),
                 AutoSize = true
             };
+            _chkBoost.CheckedChanged += (s, e) =>
+            {
+                if (_isTesting) ApplyPreview();
+            };
 
             _lblBoostVal = new Label
             {
@@ -162,28 +197,42 @@ namespace GUI.Forms
                 Location = new Point(10, 48),
                 Size = new Size(296, 35)
             };
-            _tbBoost.ValueChanged += (s, e) => _lblBoostVal.Text = $"{_tbBoost.Value}%";
+            _tbBoost.ValueChanged += (s, e) =>
+            {
+                _lblBoostVal.Text = $"{_tbBoost.Value}%";
+                if (_isTesting) ApplyPreview();
+            };
 
             gbBoost.Controls.Add(_chkBoost);
             gbBoost.Controls.Add(_lblBoostVal);
             gbBoost.Controls.Add(_tbBoost);
 
-            // Bottom Buttons
+            // Bottom Buttons: Save (left), Test (center), Cancel (right)
             _btnSave = new Button
             {
                 Text = "Save",
-                Location = new Point(14, 335),
-                Size = new Size(80, 28),
+                Location = new Point(14, 305),
+                Size = new Size(95, 30),
                 BackColor = Color.White,
                 FlatStyle = FlatStyle.System
             };
             _btnSave.Click += (s, e) => OnSave();
 
+            _btnTest = new Button
+            {
+                Text = "Test",
+                Location = new Point(125, 305),
+                Size = new Size(95, 30),
+                BackColor = Color.White,
+                FlatStyle = FlatStyle.System
+            };
+            _btnTest.Click += (s, e) => OnToggleTest();
+
             _btnCancel = new Button
             {
                 Text = "Cancel",
-                Location = new Point(250, 335),
-                Size = new Size(80, 28),
+                Location = new Point(235, 305),
+                Size = new Size(95, 30),
                 BackColor = Color.White,
                 FlatStyle = FlatStyle.System
             };
@@ -193,6 +242,7 @@ namespace GUI.Forms
             this.Controls.Add(gbGamma);
             this.Controls.Add(gbBoost);
             this.Controls.Add(_btnSave);
+            this.Controls.Add(_btnTest);
             this.Controls.Add(_btnCancel);
 
             this.AcceptButton = _btnSave;
@@ -214,8 +264,68 @@ namespace GUI.Forms
             _lblBoostVal.Text = $"{_tbBoost.Value}%";
         }
 
+        private void OnToggleTest()
+        {
+            if (!_isTesting)
+            {
+                _isTesting = true;
+                _prevVibranceLevel = _vibrance?.GetLevel() ?? 50;
+                _btnTest.Text = "Stop Test";
+                ApplyPreview();
+            }
+            else
+            {
+                RevertPreview();
+                _isTesting = false;
+                _btnTest.Text = "Test";
+            }
+        }
+
+        private void ApplyPreview()
+        {
+            if (!_isTesting) return;
+
+            if (_vibrance != null)
+            {
+                _vibrance.SetLevel(_tbVibrance.Value);
+            }
+
+            if (_gammaEngine != null)
+            {
+                if (_chkGamma.Checked || _chkBoost.Checked)
+                {
+                    double g = _chkGamma.Checked ? (_tbGamma.Value / 100.0) : 2.20;
+                    double b = _chkBoost.Checked ? (_tbBoost.Value / 100.0) : 0.0;
+                    _gammaEngine.ApplyCurve(g, b);
+                }
+                else
+                {
+                    _gammaEngine.Restore();
+                }
+            }
+        }
+
+        private void RevertPreview()
+        {
+            if (_vibrance != null)
+            {
+                _vibrance.SetLevel(_prevVibranceLevel);
+            }
+
+            if (_gammaEngine != null)
+            {
+                _gammaEngine.Restore();
+            }
+        }
+
         private void OnSave()
         {
+            if (_isTesting)
+            {
+                RevertPreview();
+                _isTesting = false;
+            }
+
             ResultProfile = new GameProfile
             {
                 Name = string.IsNullOrEmpty(_profile.Name) ? Path.GetFileNameWithoutExtension(_exeName) : _profile.Name,

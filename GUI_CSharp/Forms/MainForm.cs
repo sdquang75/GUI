@@ -319,7 +319,7 @@ namespace GUI.Forms
                     Boost = 0
                 };
 
-                using var configDlg = new GameConfigForm(exe, initialProfile);
+                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
                 {
                     _config.Games[exe] = configDlg.ResultProfile;
@@ -353,7 +353,7 @@ namespace GUI.Forms
                     Boost = 0
                 };
 
-                using var configDlg = new GameConfigForm(exe, initialProfile);
+                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
                 {
                     _config.Games[exe] = configDlg.ResultProfile;
@@ -370,7 +370,7 @@ namespace GUI.Forms
                 string? exe = _lvGames.SelectedItems[0].Tag as string;
                 if (!string.IsNullOrEmpty(exe) && _config.Games.TryGetValue(exe, out var prof))
                 {
-                    using var configDlg = new GameConfigForm(exe, prof);
+                    using var configDlg = new GameConfigForm(exe, prof, _vibrance, _gammaEngine);
                     if (configDlg.ShowDialog(this) == DialogResult.OK)
                     {
                         _config.Games[exe] = configDlg.ResultProfile;
