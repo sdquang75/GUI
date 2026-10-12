@@ -15,18 +15,17 @@ namespace GUI.Utils
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool DestroyIcon(IntPtr hIcon);
 
-        private static string IconsDirectory => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icons");
-
-        static IconHelper()
+        private static string IconsDirectory
         {
-            try
+            get
             {
-                if (!Directory.Exists(IconsDirectory))
-                {
-                    Directory.CreateDirectory(IconsDirectory);
-                }
+                string localDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icons");
+                if (Directory.Exists(localDir)) return localDir;
+
+                string appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GUI", "icons");
+                if (!Directory.Exists(appDataDir)) Directory.CreateDirectory(appDataDir);
+                return appDataDir;
             }
-            catch { }
         }
 
         public static Image GetGameIcon(string exeName, string? exePath = null, int size = 48)

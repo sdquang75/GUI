@@ -14,7 +14,9 @@ namespace GUI
         {
             try
             {
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.log");
+                string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GUI");
+                if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
+                string path = Path.Combine(logDir, "gui.log");
                 File.AppendAllText(path, $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n");
             }
             catch { }

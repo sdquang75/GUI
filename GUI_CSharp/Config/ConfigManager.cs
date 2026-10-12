@@ -58,14 +58,18 @@ namespace GUI.Config
     {
         public static string GetConfigPath()
         {
+            // 1. Check AppData first (clean single-exe mode like vibranceGUI)
+            string appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GUI");
+            string appDataFile = Path.Combine(appDataDir, "config.json");
+            if (File.Exists(appDataFile)) return appDataFile;
+
+            // 2. Check local directory (portable mode)
             string localPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
             if (File.Exists(localPath)) return localPath;
 
-            // Check working directory or parent
-            string cwdPath = Path.Combine(Environment.CurrentDirectory, "config.json");
-            if (File.Exists(cwdPath)) return cwdPath;
-
-            return localPath;
+            // 3. Default to AppData
+            if (!Directory.Exists(appDataDir)) Directory.CreateDirectory(appDataDir);
+            return appDataFile;
         }
 
         public static AppConfig Load()
@@ -100,7 +104,9 @@ namespace GUI.Config
         {
             try
             {
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+                string path = GetConfigPath();
+                string dir = Path.GetDirectoryName(path)!;
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 var opts = new JsonSerializerOptions
                 {
                     WriteIndented = true,
