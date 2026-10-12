@@ -14,7 +14,7 @@ namespace GUI.Engine
         public int defaultLevel;
     }
 
-    public class NvApiEngine : IDisposable
+    public class NvApiEngine : IVibranceEngine
     {
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
         private static extern IntPtr LoadLibrary(string lpFileName);
@@ -44,6 +44,8 @@ namespace GUI.Engine
 
         private readonly List<IntPtr> _displayHandles = new();
         public bool IsAvailable { get; private set; }
+        public string EngineName => "NVIDIA DVC";
+        public int DisplayCount => _displayHandles.Count;
         public int DesktopLevel { get; set; } = 50;
 
         public NvApiEngine()

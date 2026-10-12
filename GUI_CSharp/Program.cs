@@ -52,14 +52,18 @@ namespace GUI
                 AttachConsole(-1);
                 Console.WriteLine();
                 Console.WriteLine("=== Testing C# GUI Engines ===");
-                using var nv = new Engine.NvApiEngine();
-                Console.WriteLine($"NvAPI Available: {nv.IsAvailable}");
-                if (nv.IsAvailable)
-                {
-                    Console.WriteLine($"Current DVC Level: {nv.GetLevel()}");
-                    bool setRes = nv.SetLevel(50);
-                    Console.WriteLine($"SetLevel(50): {setRes}");
-                }
+                using var vib = new Engine.UnifiedVibranceEngine();
+                Console.WriteLine($"Active Vibrance Engine: {vib.EngineName}");
+                Console.WriteLine($"Vibrance Available: {vib.IsAvailable}");
+                Console.WriteLine($"Current Level: {vib.GetLevel()}");
+                bool setRes = vib.SetLevel(60);
+                Console.WriteLine($"SetLevel(60): {setRes}");
+                vib.Restore();
+
+                using var dwm = new Engine.WindowsDwmEngine();
+                Console.WriteLine($"DWM Engine Available: {dwm.IsAvailable} ({dwm.EngineName})");
+                Console.WriteLine($"DWM SetLevel(70): {dwm.SetLevel(70)}");
+                dwm.Restore();
 
                 using var gamma = new Engine.GammaEngine();
                 bool gammaRes = gamma.ApplyCurve(1.80, 0.0);

@@ -11,7 +11,7 @@ namespace GUI.Forms
     public class MainForm : Form
     {
         private AppConfig _config;
-        private NvApiEngine _nvApi;
+        private UnifiedVibranceEngine _vibrance;
         private GammaEngine _gammaEngine;
         private ActiveWindowObserver _observer;
 
@@ -33,7 +33,7 @@ namespace GUI.Forms
         public MainForm()
         {
             _config = ConfigManager.Load();
-            _nvApi = new NvApiEngine();
+            _vibrance = new UnifiedVibranceEngine();
             _gammaEngine = new GammaEngine();
             _observer = new ActiveWindowObserver();
 
@@ -61,8 +61,8 @@ namespace GUI.Forms
             }
 
             // Set initial desktop vibrance
-            _nvApi.DesktopLevel = _config.Desktop.Vibrance;
-            _nvApi.SetLevel(_config.Desktop.Vibrance);
+            _vibrance.DesktopLevel = _config.Desktop.Vibrance;
+            _vibrance.SetLevel(_config.Desktop.Vibrance);
             Program.Log("MainForm constructor completed");
         }
 
@@ -131,12 +131,12 @@ namespace GUI.Forms
                 int val = _tbDesktopVib.Value;
                 _lblDesktopVibVal.Text = $"{val} %";
                 _config.Desktop.Vibrance = val;
-                _nvApi.DesktopLevel = val;
+                _vibrance.DesktopLevel = val;
                 ConfigManager.Save(_config);
 
                 if (_currentGameExe == null)
                 {
-                    _nvApi.SetLevel(val);
+                    _vibrance.SetLevel(val);
                 }
             };
 
@@ -217,7 +217,7 @@ namespace GUI.Forms
 
             _lblObserverStatus = new Label
             {
-                Text = "Running!",
+                Text = $"Running! [{_vibrance.EngineName}]",
                 Location = new Point(pad + 95, 464),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
@@ -443,11 +443,11 @@ namespace GUI.Forms
             // 1. Vibrance
             if (prof.VibranceEnabled)
             {
-                _nvApi.SetLevel(prof.Vibrance);
+                _vibrance.SetLevel(prof.Vibrance);
             }
             else
             {
-                _nvApi.SetLevel(_config.Desktop.Vibrance);
+                _vibrance.SetLevel(_config.Desktop.Vibrance);
             }
 
             // 2. Gamma / Black Boost
@@ -464,7 +464,7 @@ namespace GUI.Forms
                 _gammaEnforceTimer?.Stop();
             }
 
-            _lblObserverStatus.Text = "Running!";
+            _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
         }
 
@@ -472,9 +472,9 @@ namespace GUI.Forms
         {
             _currentGameExe = null;
             _gammaEnforceTimer?.Stop();
-            _nvApi.Restore();
+            _vibrance.Restore();
             _gammaEngine.Restore();
-            _lblObserverStatus.Text = "Running!";
+            _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
         }
 
@@ -494,7 +494,7 @@ namespace GUI.Forms
             _notifyIcon.Dispose();
             _observer.Stop();
             ResetToDesktop();
-            _nvApi.Dispose();
+            _vibrance.Dispose();
             _gammaEngine.Dispose();
         }
     }
