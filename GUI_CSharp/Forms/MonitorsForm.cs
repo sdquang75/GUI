@@ -24,7 +24,7 @@ namespace GUI.Forms
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.StartPosition = FormStartPosition.CenterParent;
-            this.BackColor = Color.FromArgb(245, 245, 245);
+            this.BackColor = Color.FromArgb(240, 240, 240);
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.Icon = Utils.IconHelper.GetAppIcon();
 

@@ -58,23 +58,6 @@ namespace GUI
                 return;
             }
 
-            if (args.Length >= 2 && args[0] == "--apply-scaling")
-            {
-                int val = int.TryParse(args[1], out int v) ? v : 3;
-                var (success, msg, _) = Engine.ScalingUtilityEngine.SetAllScaling(val);
-                Log($"--apply-scaling {val} -> {success} ({msg})");
-                Environment.Exit(success ? 0 : 1);
-                return;
-            }
-
-            if (args.Length >= 1 && args[0] == "--revert-scaling")
-            {
-                var (success, msg, _) = Engine.ScalingUtilityEngine.RevertScaling();
-                Log($"--revert-scaling -> {success} ({msg})");
-                Environment.Exit(success ? 0 : 1);
-                return;
-            }
-
             if (args.Length > 0 && args[0] == "--test")
             {
                 AttachConsole(-1);
@@ -110,13 +93,6 @@ namespace GUI
                 foreach (var m in monitors)
                 {
                     Console.WriteLine($"  - {m.FriendlyName} [{(m.Enabled ? "Enabled" : "Disabled")}] (ID: {m.InstanceId})");
-                }
-
-                var scalingItems = Engine.ScalingUtilityEngine.ReadAllScalingItems();
-                Console.WriteLine($"Scaling Registry items detected: {scalingItems.Count}");
-                foreach (var s in scalingItems)
-                {
-                    Console.WriteLine($"  - [{s.SourceType}] {s.Description}: {s.ValueLabel}");
                 }
 
                 Log("=== Test Complete ===");
