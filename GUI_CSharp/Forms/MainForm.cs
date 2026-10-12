@@ -489,14 +489,6 @@ namespace GUI.Forms
                 }
             };
 
-            this.Resize += (s, e) =>
-            {
-                if (this.WindowState == FormWindowState.Minimized)
-                {
-                    this.Hide();
-                }
-            };
-
             this.FormClosing += OnFormClosing;
             this.FormClosed += (s, e) => CleanupAndRestoreDefaults();
         }
@@ -536,7 +528,6 @@ namespace GUI.Forms
 
         private const int WM_SYSCOMMAND = 0x0112;
         private const int SC_CLOSE = 0xF060;
-        private const int SC_MINIMIZE = 0xF020;
 
         protected override void WndProc(ref Message m)
         {
@@ -548,7 +539,8 @@ namespace GUI.Forms
 
             if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_CLOSE && !_isExplicitExit)
             {
-                m.WParam = (IntPtr)SC_MINIMIZE;
+                this.Hide();
+                return;
             }
 
             base.WndProc(ref m);
@@ -910,7 +902,6 @@ namespace GUI.Forms
             if (!_isExplicitExit && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
-                this.WindowState = FormWindowState.Minimized;
                 this.Hide();
                 return;
             }
