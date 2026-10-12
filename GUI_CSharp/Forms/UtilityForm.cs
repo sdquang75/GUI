@@ -41,7 +41,7 @@ namespace GUI.Forms
 
             var lblExplain = new Label
             {
-                Text = "Sets display driver scaling to 2 (Stretched / Full Screen) in Windows Registry.\nFixes 4:3 black bars on laptops without MUX switch (Intel/AMD iGPU).",
+                Text = "Sets display driver scaling to 3 (Stretched / Full Screen) in Windows Registry.\nFixes 4:3 black bars on laptops without MUX switch (Intel/AMD iGPU).",
                 Location = new Point(10, 20),
                 Size = new Size(460, 36),
                 ForeColor = Color.FromArgb(51, 65, 85)
@@ -63,7 +63,7 @@ namespace GUI.Forms
 
             _btnSetStretched = new Button
             {
-                Text = "⚡ Set All Scaling to 2 (Stretched)",
+                Text = "⚡ Set All Scaling to 3 (Stretched)",
                 Location = new Point(10, 234),
                 Size = new Size(220, 32),
                 BackColor = Color.FromArgb(0, 120, 215),
@@ -155,7 +155,7 @@ namespace GUI.Forms
                 lvi.SubItems.Add(item.Description);
                 lvi.SubItems.Add(item.ValueLabel);
                 lvi.Tag = item;
-                if (item.CurrentValue == 2)
+                if (item.CurrentValue == 3)
                 {
                     lvi.ForeColor = Color.FromArgb(22, 163, 74);
                 }
@@ -173,7 +173,7 @@ namespace GUI.Forms
 
         private void OnSetStretched()
         {
-            var (ok, msg, count) = ScalingUtilityEngine.SetAllScaling(2);
+            var (ok, msg, count) = ScalingUtilityEngine.SetAllScaling(3);
             _lblStatus.Text = msg;
             _lblStatus.ForeColor = ok ? Color.FromArgb(22, 163, 74) : Color.DarkRed;
             RefreshItems();

@@ -20,9 +20,10 @@ namespace GUI.Engine
 
         public string ValueLabel => CurrentValue switch
         {
-            2 => "2 (Stretched / Full Screen)",
+            3 => "3 (Stretched / Full Screen)",
             4 => "4 (Maintain Aspect Ratio / Black Bars)",
-            1 => "1 (Center)",
+            2 => "2 (Center / No Scaling)",
+            1 => "1 (Identity)",
             null => "Not set (Default)",
             _ => $"{CurrentValue} (Custom)"
         };
@@ -147,7 +148,7 @@ namespace GUI.Engine
             return list;
         }
 
-        public static (bool Success, string Message, int Count) SetAllScaling(int targetValue = 2)
+        public static (bool Success, string Message, int Count) SetAllScaling(int targetValue = 3)
         {
             if (!IsAdministrator())
             {

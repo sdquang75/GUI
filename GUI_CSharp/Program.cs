@@ -60,7 +60,7 @@ namespace GUI
 
             if (args.Length >= 2 && args[0] == "--apply-scaling")
             {
-                int val = int.TryParse(args[1], out int v) ? v : 2;
+                int val = int.TryParse(args[1], out int v) ? v : 3;
                 var (success, msg, _) = Engine.ScalingUtilityEngine.SetAllScaling(val);
                 Log($"--apply-scaling {val} -> {success} ({msg})");
                 Environment.Exit(success ? 0 : 1);
