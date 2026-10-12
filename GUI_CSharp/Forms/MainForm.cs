@@ -212,8 +212,7 @@ namespace GUI.Forms
             {
                 Text = "Observer status:",
                 Location = new Point(pad, 464),
-                AutoSize = true,
-                Cursor = Cursors.Hand
+                AutoSize = true
             };
 
             _lblObserverStatus = new Label
@@ -222,22 +221,8 @@ namespace GUI.Forms
                 Location = new Point(pad + 95, 464),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
-                ForeColor = Color.FromArgb(22, 163, 74),
-                Cursor = Cursors.Hand
+                ForeColor = Color.FromArgb(22, 163, 74)
             };
-
-            void ShowAuthorPopup()
-            {
-                MessageBox.Show(
-                    "author :Sdquang75 và gmail sdquang75@gmail.com",
-                    "Author Info",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information
-                );
-            }
-
-            lblObserverPrompt.DoubleClick += (s, e) => ShowAuthorPopup();
-            _lblObserverStatus.DoubleClick += (s, e) => ShowAuthorPopup();
 
             this.Controls.Add(gbSettings);
             this.Controls.Add(gbProg);
@@ -327,7 +312,7 @@ namespace GUI.Forms
                     Name = Path.GetFileNameWithoutExtension(exe),
                     Path = dlg.SelectedPath ?? "",
                     VibranceEnabled = true,
-                    Vibrance = 75,
+                    Vibrance = 50,
                     GammaEnabled = false,
                     Gamma = 1.80,
                     BoostEnabled = false,
@@ -361,7 +346,7 @@ namespace GUI.Forms
                     Name = Path.GetFileNameWithoutExtension(exe),
                     Path = ofd.FileName,
                     VibranceEnabled = true,
-                    Vibrance = 75,
+                    Vibrance = 50,
                     GammaEnabled = false,
                     Gamma = 1.80,
                     BoostEnabled = false,

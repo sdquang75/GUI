@@ -44,7 +44,7 @@ namespace GUI.Forms
             {
                 Name = Path.GetFileNameWithoutExtension(exeName),
                 VibranceEnabled = true,
-                Vibrance = 75,
+                Vibrance = 50,
                 GammaEnabled = false,
                 Gamma = 1.80,
                 BoostEnabled = false,
@@ -88,7 +88,7 @@ namespace GUI.Forms
 
             _lblVibranceVal = new Label
             {
-                Text = "75%",
+                Text = "50%",
                 Location = new Point(255, 14),
                 Size = new Size(50, 20),
                 TextAlign = ContentAlignment.MiddleRight,
@@ -99,7 +99,7 @@ namespace GUI.Forms
             {
                 Minimum = 0,
                 Maximum = 100,
-                Value = 75,
+                Value = 50,
                 TickFrequency = 10,
                 Location = new Point(10, 32),
                 Size = new Size(296, 35)
@@ -153,10 +153,6 @@ namespace GUI.Forms
             _tbGamma.ValueChanged += (s, e) =>
             {
                 _lblGammaVal.Text = $"{(_tbGamma.Value / 100.0):0.00}";
-                if (!_chkGamma.Checked && _tbGamma.Value != 220)
-                {
-                    _chkGamma.Checked = true;
-                }
                 if (_isTesting) ApplyPreview();
             };
 
@@ -204,10 +200,6 @@ namespace GUI.Forms
             _tbBoost.ValueChanged += (s, e) =>
             {
                 _lblBoostVal.Text = $"{_tbBoost.Value}%";
-                if (!_chkBoost.Checked && _tbBoost.Value > 0)
-                {
-                    _chkBoost.Checked = true;
-                }
                 if (_isTesting) ApplyPreview();
             };
 
@@ -279,21 +271,6 @@ namespace GUI.Forms
                 _isTesting = true;
                 _prevVibranceLevel = _vibrance?.GetLevel() ?? 50;
                 _btnTest.Text = "Stop Test";
-                _btnTest.BackColor = Color.FromArgb(254, 226, 226);
-
-                // Auto-enable gamma if the user chose a non-standard gamma value
-                if (!_chkGamma.Checked && _tbGamma.Value != 220)
-                {
-                    _chkGamma.Checked = true;
-                }
-
-                // If currently at neutral 50% vibrance and no gamma/boost enabled, bump to 75% for an immediate visible test
-                if (_tbVibrance.Value == 50 && !_chkGamma.Checked && !_chkBoost.Checked)
-                {
-                    _tbVibrance.Value = 75;
-                    _lblVibranceVal.Text = "75%";
-                }
-
                 ApplyPreview();
             }
             else
@@ -301,7 +278,6 @@ namespace GUI.Forms
                 RevertPreview();
                 _isTesting = false;
                 _btnTest.Text = "Test";
-                _btnTest.BackColor = Color.White;
             }
         }
 
