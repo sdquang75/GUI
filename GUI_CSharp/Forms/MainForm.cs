@@ -58,8 +58,11 @@ namespace GUI.Forms
             (800, 1080)
         };
 
-        public MainForm()
+        private bool _startMinimized = false;
+
+        public MainForm(bool startMinimized = false)
         {
+            _startMinimized = startMinimized;
             _config = ConfigManager.Load();
             _vibrance = new UnifiedVibranceEngine();
             _gammaEngine = new GammaEngine();
@@ -76,12 +79,29 @@ namespace GUI.Forms
             InitializeComponent();
             LoadConfigToUi();
 
-            this.Load += (s, e) => Program.Log("MainForm.Load fired");
+            if (_startMinimized)
+            {
+                this.WindowState = FormWindowState.Minimized;
+                this.ShowInTaskbar = false;
+            }
+
+            this.Load += (s, e) =>
+            {
+                Program.Log("MainForm.Load fired");
+                InitObserver();
+                RefreshCurrentResolution();
+                if (_startMinimized)
+                {
+                    this.Hide();
+                }
+            };
             this.Shown += (s, e) =>
             {
                 Program.Log("MainForm.Shown fired");
-                InitObserver();
-                RefreshCurrentResolution();
+                if (_startMinimized)
+                {
+                    this.Hide();
+                }
             };
 
             if (_config.Autostart)
@@ -725,6 +745,7 @@ namespace GUI.Forms
 
         private void RestoreFromTray()
         {
+            this.ShowInTaskbar = true;
             this.Show();
             this.WindowState = FormWindowState.Normal;
             this.Activate();

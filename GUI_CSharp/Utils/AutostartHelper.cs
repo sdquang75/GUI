@@ -19,7 +19,7 @@ namespace GUI.Utils
                     if (enable)
                     {
                         string exePath = Application.ExecutablePath;
-                        key.SetValue(AppName, $"\"{exePath}\"");
+                        key.SetValue(AppName, $"\"{exePath}\" --minimized");
                     }
                     else
                     {

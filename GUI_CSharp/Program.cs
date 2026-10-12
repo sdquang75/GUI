@@ -99,11 +99,16 @@ namespace GUI
                 return;
             }
 
+            bool startMinimized = Array.Exists(args, a =>
+                string.Equals(a, "--minimized", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(a, "-minimized", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(a, "--autostart", StringComparison.OrdinalIgnoreCase));
+
             ApplicationConfiguration.Initialize();
             try
             {
-                Log("Entering Application.Run");
-                Application.Run(new MainForm());
+                Log($"Entering Application.Run (startMinimized={startMinimized})");
+                Application.Run(new MainForm(startMinimized));
                 Log("Exited Application.Run normally");
             }
             catch (Exception ex)
