@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 using GUI.Forms;
 
@@ -7,8 +9,20 @@ namespace GUI
 {
     static class Program
     {
-        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        public const string SingleInstanceMutexName = @"Local\VibeGamerRamp_GUI_SingleInstance_Mutex";
+        public const string ShowWindowEventName = @"Local\VibeGamerRamp_GUI_ShowWindow_Event";
+
+        [DllImport("kernel32.dll")]
         private static extern bool AttachConsole(int dwProcessId);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern uint RegisterWindowMessage(string lpString);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        private static readonly IntPtr HWND_BROADCAST = new IntPtr(0xFFFF);
+        public static readonly uint WM_SHOW_EXISTING_INSTANCE = RegisterWindowMessage("WM_VIBE_GAMER_RAMP_SHOW_EXISTING");
 
         public static void Log(string msg)
         {
@@ -22,30 +36,29 @@ namespace GUI
             catch { }
         }
 
+        private static void SignalExistingInstance()
+        {
+            try
+            {
+                using var evt = EventWaitHandle.OpenExisting(ShowWindowEventName);
+                evt.Set();
+            }
+            catch { }
+
+            try
+            {
+                if (WM_SHOW_EXISTING_INSTANCE != 0)
+                {
+                    PostMessage(HWND_BROADCAST, WM_SHOW_EXISTING_INSTANCE, IntPtr.Zero, IntPtr.Zero);
+                }
+            }
+            catch { }
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
             Log("Program.Main started with args: " + string.Join(" ", args));
-
-            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
-            {
-                Log($"UnhandledException: {e.ExceptionObject}");
-            };
-
-            Application.ThreadException += (s, e) =>
-            {
-                Log($"ThreadException: {e.Exception}");
-            };
-
-            Application.ApplicationExit += (s, e) =>
-            {
-                Log("Application.ApplicationExit triggered");
-            };
-
-            AppDomain.CurrentDomain.ProcessExit += (s, e) =>
-            {
-                Log("AppDomain.ProcessExit triggered");
-            };
 
             if (args.Length >= 3 && args[0] == "--monitor-op")
             {
@@ -55,6 +68,27 @@ namespace GUI
                 var (success, msg) = Engine.MonitorEngine.SetDevNodeEnabledDirect(instanceId, enable);
                 Log($"--monitor-op {op} {instanceId} -> {success} ({msg})");
                 Environment.Exit(success ? 0 : 1);
+                return;
+            }
+
+            if (args.Length >= 2 && args[0] == "--goodbyedpi-op")
+            {
+                string op = args[1].ToLowerInvariant();
+                bool enable = (op == "start" || op == "enable");
+                int parentPid = (args.Length >= 3 && int.TryParse(args[2], out int pid)) ? pid : 0;
+                var (success, msg) = Engine.GoodbyeDpiEngine.SetEnabledDirect(enable, parentPid);
+                Log($"--goodbyedpi-op {op} (parent={parentPid}) -> {success} ({msg})");
+                Environment.Exit(success ? 0 : 1);
+                return;
+            }
+
+            if (args.Length >= 2 && args[0] == "--goodbyedpi-watch")
+            {
+                if (int.TryParse(args[1], out int parentPid) && parentPid > 0)
+                {
+                    Engine.GoodbyeDpiEngine.RunWatchdog(parentPid);
+                }
+                Environment.Exit(0);
                 return;
             }
 
@@ -69,17 +103,17 @@ namespace GUI
                 Console.WriteLine($"Current Level: {vib.GetLevel()}");
                 bool setRes = vib.SetLevel(60);
                 Console.WriteLine($"SetLevel(60): {setRes}");
-                vib.Restore();
+                vib.ResetToDefault();
 
                 using var dwm = new Engine.WindowsDwmEngine();
                 Console.WriteLine($"DWM Engine Available: {dwm.IsAvailable} ({dwm.EngineName})");
                 Console.WriteLine($"DWM SetLevel(70): {dwm.SetLevel(70)}");
-                dwm.Restore();
+                dwm.ResetToDefault();
 
                 using var gamma = new Engine.GammaEngine();
                 bool gammaRes = gamma.ApplyCurve(1.80, 0.0);
                 Log($"Gamma 1.8 Apply: {gammaRes}");
-                gamma.Restore();
+                gamma.ResetToIdentity();
 
                 var testIcon = Utils.IconHelper.GetGameIcon("cs2.exe", @"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe", 48);
                 Log($"CS2 Icon Loaded: {testIcon.Width}x{testIcon.Height}");
@@ -104,16 +138,78 @@ namespace GUI
                 string.Equals(a, "-minimized", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(a, "--autostart", StringComparison.OrdinalIgnoreCase));
 
+            // Single-instance check
+            bool createdNew = false;
+            Mutex? singleInstanceMutex = null;
+            try
+            {
+                singleInstanceMutex = new Mutex(true, SingleInstanceMutexName, out createdNew);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                createdNew = false;
+            }
+
+            if (!createdNew)
+            {
+                Log("Another GUI instance is already running. Signaling existing instance and exiting.");
+                if (!startMinimized)
+                {
+                    SignalExistingInstance();
+                }
+                singleInstanceMutex?.Dispose();
+                return;
+            }
+
+            MainForm? mainForm = null;
+
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                Log($"UnhandledException: {e.ExceptionObject}");
+                try { mainForm?.CleanupAndRestoreDefaults(); } catch { }
+            };
+
+            Application.ThreadException += (s, e) =>
+            {
+                Log($"ThreadException: {e.Exception}");
+            };
+
+            Application.ApplicationExit += (s, e) =>
+            {
+                Log("Application.ApplicationExit triggered");
+                try { mainForm?.CleanupAndRestoreDefaults(); } catch { }
+            };
+
+            AppDomain.CurrentDomain.ProcessExit += (s, e) =>
+            {
+                Log("AppDomain.ProcessExit triggered");
+                try { mainForm?.CleanupAndRestoreDefaults(); } catch { }
+            };
+
             ApplicationConfiguration.Initialize();
             try
             {
                 Log($"Entering Application.Run (startMinimized={startMinimized})");
-                Application.Run(new MainForm(startMinimized));
+                mainForm = new MainForm(startMinimized);
+                Application.Run(mainForm);
                 Log("Exited Application.Run normally");
             }
             catch (Exception ex)
             {
                 Log($"Exception in Application.Run: {ex}");
+            }
+            finally
+            {
+                try { mainForm?.CleanupAndRestoreDefaults(); } catch { }
+                try
+                {
+                    if (createdNew && singleInstanceMutex != null)
+                    {
+                        singleInstanceMutex.ReleaseMutex();
+                    }
+                }
+                catch { }
+                singleInstanceMutex?.Dispose();
             }
         }
     }

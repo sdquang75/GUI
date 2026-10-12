@@ -83,6 +83,48 @@ namespace GUI.Engine
             new("800 x 1080 (Ultra Stretched)", 800, 1080, "20:27")
         };
 
+        private static (int Width, int Height, int Frequency)? _initialResolution;
+        private static bool _hasModifiedResolution = false;
+
+        public static void CaptureInitialResolution()
+        {
+            if (_initialResolution == null)
+            {
+                _initialResolution = GetCurrentResolution();
+                if (_initialResolution.HasValue)
+                {
+                    Program.Log($"DisplayEngine: Captured initial resolution {_initialResolution.Value.Width}x{_initialResolution.Value.Height} @ {_initialResolution.Value.Frequency}Hz");
+                }
+            }
+        }
+
+        public static void RestoreDefaultResolution()
+        {
+            try
+            {
+                if (!_hasModifiedResolution || !_initialResolution.HasValue)
+                {
+                    return;
+                }
+
+                var init = _initialResolution.Value;
+                var cur = GetCurrentResolution();
+                if (!cur.HasValue || cur.Value.Width != init.Width || cur.Value.Height != init.Height || cur.Value.Frequency != init.Frequency)
+                {
+                    Program.Log($"DisplayEngine: Restoring default resolution {init.Width}x{init.Height} @ {init.Frequency}Hz on exit");
+                    Rollback(init.Width, init.Height, init.Frequency);
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.Log($"DisplayEngine.RestoreDefaultResolution error: {ex.Message}");
+            }
+            finally
+            {
+                _hasModifiedResolution = false;
+            }
+        }
+
         public static (int Width, int Height, int Frequency)? GetCurrentResolution()
         {
             var devmode = new DEVMODE();
@@ -130,6 +172,8 @@ namespace GUI.Engine
 
         public static (bool Success, string Message) SetResolution(int width, int height, int refreshRate = 0)
         {
+            CaptureInitialResolution();
+
             var curMode = new DEVMODE();
             curMode.dmSize = (ushort)Marshal.SizeOf<DEVMODE>();
             if (!EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref curMode))
@@ -174,6 +218,7 @@ namespace GUI.Engine
             res = ChangeDisplaySettings(IntPtr.Zero, CDS_RESET);
             if (res == DISP_CHANGE_SUCCESSFUL)
             {
+                _hasModifiedResolution = true;
                 int actualHz = refreshRate > 0 ? refreshRate : origFreq;
                 return (true, $"Applied {width} x {height} @ {actualHz}Hz");
             }

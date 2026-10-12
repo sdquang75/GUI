@@ -185,6 +185,8 @@ namespace GUI.Engine
             return "";
         }
 
+        private static readonly HashSet<string> _disabledInSession = new(StringComparer.OrdinalIgnoreCase);
+
         public static (bool Success, string Message) SetMonitorEnabled(string instanceId, bool enable)
         {
             if (string.IsNullOrWhiteSpace(instanceId))
@@ -192,43 +194,82 @@ namespace GUI.Engine
                 return (false, "Invalid instance ID.");
             }
 
+            (bool Success, string Message) result;
             if (IsAdministrator())
             {
-                return SetDevNodeEnabledDirect(instanceId, enable);
+                result = SetDevNodeEnabledDirect(instanceId, enable);
+            }
+            else
+            {
+                // Launch self with elevation
+                try
+                {
+                    string? exePath = Environment.ProcessPath;
+                    if (string.IsNullOrEmpty(exePath))
+                    {
+                        return (false, "Could not determine application path for elevation.");
+                    }
+
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = exePath,
+                        Arguments = $"--monitor-op {(enable ? "enable" : "disable")} \"{instanceId}\"",
+                        Verb = "runas",
+                        UseShellExecute = true,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    };
+
+                    using var proc = Process.Start(psi);
+                    if (proc == null) return (false, "UAC prompt was cancelled.");
+
+                    proc.WaitForExit(10000);
+                    if (proc.ExitCode == 0)
+                    {
+                        result = (true, $"Monitor {(enable ? "enabled" : "disabled")} successfully.");
+                    }
+                    else
+                    {
+                        result = (false, $"Operation failed with exit code {proc.ExitCode}.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    result = (false, $"Elevation request failed: {ex.Message}");
+                }
             }
 
-            // Launch self with elevation
+            if (result.Success)
+            {
+                if (!enable)
+                {
+                    _disabledInSession.Add(instanceId);
+                }
+                else
+                {
+                    _disabledInSession.Remove(instanceId);
+                }
+            }
+
+            return result;
+        }
+
+        public static void RestoreOnExit()
+        {
             try
             {
-                string? exePath = Environment.ProcessPath;
-                if (string.IsNullOrEmpty(exePath))
+                if (_disabledInSession.Count == 0) return;
+
+                var toEnable = new List<string>(_disabledInSession);
+                foreach (var id in toEnable)
                 {
-                    return (false, "Could not determine application path for elevation.");
+                    SetMonitorEnabled(id, true);
                 }
-
-                var psi = new ProcessStartInfo
-                {
-                    FileName = exePath,
-                    Arguments = $"--monitor-op {(enable ? "enable" : "disable")} \"{instanceId}\"",
-                    Verb = "runas",
-                    UseShellExecute = true,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden
-                };
-
-                using var proc = Process.Start(psi);
-                if (proc == null) return (false, "UAC prompt was cancelled.");
-
-                proc.WaitForExit(10000);
-                if (proc.ExitCode == 0)
-                {
-                    return (true, $"Monitor {(enable ? "enabled" : "disabled")} successfully.");
-                }
-                return (false, $"Operation failed with exit code {proc.ExitCode}.");
+                _disabledInSession.Clear();
             }
             catch (Exception ex)
             {
-                return (false, $"Elevation request failed: {ex.Message}");
+                Program.Log($"MonitorEngine.RestoreOnExit error: {ex.Message}");
             }
         }
 

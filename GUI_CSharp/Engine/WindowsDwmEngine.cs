@@ -43,6 +43,7 @@ namespace GUI.Engine
         private static extern bool MagSetFullscreenColorEffect(ref MAGCOLOREFFECT pEffect);
 
         private bool _isInitialized = false;
+        private bool _isDisposed = false;
         private int _currentLevel = 50;
 
         public bool IsAvailable { get; private set; } = false;
@@ -107,6 +108,8 @@ namespace GUI.Engine
 
         public bool SetLevel(int level)
         {
+            if (_isDisposed) return false;
+
             if (!_isInitialized && !MagInitialize())
             {
                 IsAvailable = false;
@@ -169,16 +172,18 @@ namespace GUI.Engine
 
         public void Restore()
         {
-            SetLevel(DesktopLevel);
+            if (!_isDisposed)
+            {
+                SetLevel(DesktopLevel);
+            }
         }
 
-        public void Dispose()
+        public void ResetToDefault()
         {
             try
             {
                 if (_isInitialized)
                 {
-                    // Reset to identity
                     MAGCOLOREFFECT id = new MAGCOLOREFFECT
                     {
                         transform = new float[25]
@@ -191,11 +196,29 @@ namespace GUI.Engine
                         }
                     };
                     MagSetFullscreenColorEffect(ref id);
+                    _currentLevel = 50;
+                }
+            }
+            catch { }
+        }
+
+        public void Dispose()
+        {
+            if (_isDisposed) return;
+            try
+            {
+                ResetToDefault();
+                if (_isInitialized)
+                {
                     MagUninitialize();
                     _isInitialized = false;
                 }
             }
             catch { }
+            finally
+            {
+                _isDisposed = true;
+            }
         }
     }
 }

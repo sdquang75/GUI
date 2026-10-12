@@ -42,11 +42,13 @@ namespace GUI.Engine
         private NvAPI_SetDVCLevelExDelegate? _setDvcLevelEx;
         private NvAPI_GetDVCInfoExDelegate? _getDvcInfoEx;
 
+        public const int DefaultVibranceLevel = 50;
+        private bool _isDisposed = false;
         private readonly List<IntPtr> _displayHandles = new();
         public bool IsAvailable { get; private set; }
         public string EngineName => "NVIDIA DVC";
         public int DisplayCount => _displayHandles.Count;
-        public int DesktopLevel { get; set; } = 50;
+        public int DesktopLevel { get; set; } = DefaultVibranceLevel;
 
         public NvApiEngine()
         {
@@ -162,7 +164,7 @@ namespace GUI.Engine
 
         public bool SetLevel(int level)
         {
-            if (!IsAvailable || _setDvcLevelEx == null || _displayHandles.Count == 0)
+            if (_isDisposed || !IsAvailable || _setDvcLevelEx == null || _displayHandles.Count == 0)
                 return false;
 
             level = Math.Clamp(level, 0, 100);
@@ -187,15 +189,34 @@ namespace GUI.Engine
 
         public void Restore()
         {
-            if (IsAvailable)
+            if (!_isDisposed && IsAvailable)
             {
                 SetLevel(DesktopLevel);
             }
         }
 
+        public void ResetToDefault()
+        {
+            if (!IsAvailable || _setDvcLevelEx == null || _displayHandles.Count == 0)
+                return;
+
+            var info = new NV_DISPLAY_DVC_INFO_EX
+            {
+                version = (uint)Marshal.SizeOf<NV_DISPLAY_DVC_INFO_EX>() | (1 << 16),
+                currentLevel = DefaultVibranceLevel
+            };
+
+            foreach (var h in _displayHandles)
+            {
+                _setDvcLevelEx(h, 0, ref info);
+            }
+        }
+
         public void Dispose()
         {
-            Restore();
+            if (_isDisposed) return;
+            ResetToDefault();
+            _isDisposed = true;
         }
     }
 }

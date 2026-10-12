@@ -25,34 +25,18 @@ namespace GUI.Engine
         [DllImport("gdi32.dll")]
         private static extern bool SetDeviceGammaRamp(IntPtr hDC, void* lpRamp);
 
-        private RAMP _originalRamp;
-        private bool _hasOriginalRamp;
         private RAMP _lastAppliedRamp;
+        private bool _isDisposed = false;
         public bool IsCustomActive { get; private set; }
 
         public GammaEngine()
         {
-            BackupOriginalRamp();
-        }
-
-        public void BackupOriginalRamp()
-        {
-            IntPtr hdc = GetDC(IntPtr.Zero);
-            if (hdc != IntPtr.Zero)
-            {
-                fixed (RAMP* pOrig = &_originalRamp)
-                {
-                    if (GetDeviceGammaRamp(hdc, pOrig))
-                    {
-                        _hasOriginalRamp = true;
-                    }
-                }
-                ReleaseDC(IntPtr.Zero, hdc);
-            }
         }
 
         public bool ApplyCurve(double gamma = 1.80, double blackBoost = 0.0)
         {
+            if (_isDisposed) return false;
+
             gamma = Math.Clamp(gamma, 1.20, 3.00);
             blackBoost = Math.Clamp(blackBoost, 0.0, 1.0);
             double baseP = gamma / 2.20;
@@ -89,7 +73,7 @@ namespace GUI.Engine
 
         public bool EnforceIfNeeded()
         {
-            if (!IsCustomActive) return false;
+            if (_isDisposed || !IsCustomActive) return false;
 
             IntPtr hdc = GetDC(IntPtr.Zero);
             if (hdc == IntPtr.Zero) return false;
@@ -114,6 +98,7 @@ namespace GUI.Engine
 
         public void ResetToIdentity()
         {
+            IsCustomActive = false;
             RAMP identity = new RAMP();
             for (int i = 0; i < 256; i++)
             {
@@ -133,28 +118,14 @@ namespace GUI.Engine
 
         public void Restore()
         {
-            IsCustomActive = false;
-            if (_hasOriginalRamp)
-            {
-                IntPtr hdc = GetDC(IntPtr.Zero);
-                if (hdc != IntPtr.Zero)
-                {
-                    fixed (RAMP* pOrig = &_originalRamp)
-                    {
-                        SetDeviceGammaRamp(hdc, pOrig);
-                    }
-                    ReleaseDC(IntPtr.Zero, hdc);
-                }
-            }
-            else
-            {
-                ResetToIdentity();
-            }
+            ResetToIdentity();
         }
 
         public void Dispose()
         {
-            Restore();
+            if (_isDisposed) return;
+            ResetToIdentity();
+            _isDisposed = true;
         }
     }
 }

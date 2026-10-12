@@ -51,11 +51,20 @@ namespace GUI.Engine
 
         public void Restore() => _activeEngine.Restore();
 
+        public void ResetToDefault()
+        {
+            try
+            {
+                _activeEngine.ResetToDefault();
+            }
+            catch { }
+        }
+
         public void Dispose()
         {
             try
             {
-                _activeEngine.Restore();
+                _activeEngine.ResetToDefault();
                 _nvApi.Dispose();
                 _dwm.Dispose();
             }

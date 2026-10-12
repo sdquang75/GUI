@@ -2,19 +2,32 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 using GUI.Config;
 using GUI.Engine;
 using GUI.Utils;
+using Microsoft.Win32;
 
 namespace GUI.Forms
 {
     public class MainForm : Form
     {
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool ChangeWindowMessageFilter(uint message, uint dwFlag);
+
+        private const uint MSGFLT_ADD = 1;
+
         private AppConfig _config;
         private UnifiedVibranceEngine _vibrance;
         private GammaEngine _gammaEngine;
         private ActiveWindowObserver _observer;
+        private EventWaitHandle? _showWindowEvent;
+        private RegisteredWaitHandle? _showWindowWaitHandle;
 
         // --- Left Panel: Vibrance & Games ---
         private CheckBox _chkAutostart;
@@ -29,6 +42,7 @@ namespace GUI.Forms
         private System.Windows.Forms.Timer? _gammaEnforceTimer;
         private string? _currentGameExe = null;
         private bool _isExplicitExit = false;
+        private bool _isCleanedUp = false;
 
         // --- Right Panel: Quick Resolutions ---
         private Label _lblCurrentRes;
@@ -38,6 +52,7 @@ namespace GUI.Forms
         private Button _btnApplyCustom;
         private Button _btnOpenGpuPanel;
         private Label _lblResStatus;
+        private Button _btnOpenUtility;
         private Button _btnOpenMonitors;
 
         private static readonly (int Width, int Height)[] QuickResolutions = new[]
@@ -68,16 +83,22 @@ namespace GUI.Forms
             _gammaEngine = new GammaEngine();
             _observer = new ActiveWindowObserver();
 
+            DisplayEngine.CaptureInitialResolution();
+            _gammaEngine.ResetToIdentity();
+
             _gammaEnforceTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _gammaEnforceTimer.Tick += (s, e) =>
             {
-                if (_currentGameExe != null) _gammaEngine.EnforceIfNeeded();
+                if (!_isCleanedUp && _currentGameExe != null) _gammaEngine.EnforceIfNeeded();
             };
 
             this.Icon = IconHelper.GetAppIcon();
 
             InitializeComponent();
             LoadConfigToUi();
+            InitSingleInstanceListener();
+
+            SystemEvents.SessionEnding += OnSessionEnding;
 
             if (_startMinimized)
             {
@@ -90,16 +111,14 @@ namespace GUI.Forms
                 Program.Log("MainForm.Load fired");
                 InitObserver();
                 RefreshCurrentResolution();
-                if (_startMinimized)
-                {
-                    this.Hide();
-                }
             };
             this.Shown += (s, e) =>
             {
                 Program.Log("MainForm.Shown fired");
                 if (_startMinimized)
                 {
+                    _startMinimized = false;
+                    this.ShowInTaskbar = false;
                     this.Hide();
                 }
             };
@@ -409,8 +428,24 @@ namespace GUI.Forms
             this.Controls.Add(gbQuickRes);
 
             // ==========================================
-            // 3. BOTTOM RIGHT: "Monitors" button
+            // 3. BOTTOM RIGHT: "Utility" & "Monitors" buttons
             // ==========================================
+            _btnOpenUtility = new Button
+            {
+                Text = "Utility",
+                Location = new Point(rightX + colW - 246, 462),
+                Size = new Size(120, 28),
+                BackColor = Color.White,
+                Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point),
+                FlatStyle = FlatStyle.System
+            };
+            _btnOpenUtility.Click += (s, e) =>
+            {
+                using var dlg = new UtilityForm();
+                dlg.ShowDialog(this);
+            };
+            this.Controls.Add(_btnOpenUtility);
+
             _btnOpenMonitors = new Button
             {
                 Text = "Monitors",
@@ -459,11 +494,56 @@ namespace GUI.Forms
             {
                 if (this.WindowState == FormWindowState.Minimized)
                 {
+                    this.ShowInTaskbar = false;
                     this.Hide();
                 }
             };
 
             this.FormClosing += OnFormClosing;
+            this.FormClosed += (s, e) => CleanupAndRestoreDefaults();
+        }
+
+        private void InitSingleInstanceListener()
+        {
+            try
+            {
+                if (Program.WM_SHOW_EXISTING_INSTANCE != 0)
+                {
+                    ChangeWindowMessageFilter(Program.WM_SHOW_EXISTING_INSTANCE, MSGFLT_ADD);
+                }
+
+                _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ShowWindowEventName);
+                _showWindowWaitHandle = ThreadPool.RegisterWaitForSingleObject(
+                    _showWindowEvent,
+                    (state, timedOut) =>
+                    {
+                        if (!timedOut && !this.IsDisposed && !_isCleanedUp && this.IsHandleCreated)
+                        {
+                            try
+                            {
+                                this.BeginInvoke((MethodInvoker)RestoreFromTray);
+                            }
+                            catch { }
+                        }
+                    },
+                    null,
+                    -1,
+                    false);
+            }
+            catch (Exception ex)
+            {
+                Program.Log($"InitSingleInstanceListener failed: {ex.Message}");
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (Program.WM_SHOW_EXISTING_INSTANCE != 0 && m.Msg == Program.WM_SHOW_EXISTING_INSTANCE)
+            {
+                RestoreFromTray();
+                return;
+            }
+            base.WndProc(ref m);
         }
 
         private void RefreshCurrentResolution()
@@ -670,13 +750,13 @@ namespace GUI.Forms
 
         private void OnForegroundAppChanged(string? exeName)
         {
-            if (this.IsDisposed || !this.IsHandleCreated) return;
+            if (this.IsDisposed || _isCleanedUp || !this.IsHandleCreated) return;
 
             try
             {
                 this.BeginInvoke((MethodInvoker)delegate
                 {
-                    if (this.IsDisposed) return;
+                    if (this.IsDisposed || _isCleanedUp) return;
                     string? matchedExe = null;
                     if (!string.IsNullOrEmpty(exeName))
                     {
@@ -705,6 +785,7 @@ namespace GUI.Forms
 
         private void ApplyGameProfile(string exe, GameProfile prof)
         {
+            if (_isCleanedUp) return;
             _currentGameExe = exe;
 
             if (prof.VibranceEnabled)
@@ -735,6 +816,7 @@ namespace GUI.Forms
 
         private void ResetToDesktop()
         {
+            if (_isCleanedUp) return;
             _currentGameExe = null;
             _gammaEnforceTimer?.Stop();
             _vibrance.Restore();
@@ -743,12 +825,75 @@ namespace GUI.Forms
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
         }
 
-        private void RestoreFromTray()
+        public void RestoreFromTray()
         {
+            if (this.IsDisposed || _isCleanedUp) return;
+            _startMinimized = false;
             this.ShowInTaskbar = true;
             this.Show();
-            this.WindowState = FormWindowState.Normal;
+            if (this.WindowState == FormWindowState.Minimized)
+            {
+                this.WindowState = FormWindowState.Normal;
+            }
+            this.BringToFront();
+            this.TopMost = true;
             this.Activate();
+            this.TopMost = false;
+            if (this.IsHandleCreated)
+            {
+                SetForegroundWindow(this.Handle);
+            }
+        }
+
+        private void OnSessionEnding(object sender, SessionEndingEventArgs e)
+        {
+            Program.Log($"SystemEvents.SessionEnding triggered ({e.Reason})");
+            CleanupAndRestoreDefaults();
+        }
+
+        public void CleanupAndRestoreDefaults()
+        {
+            if (_isCleanedUp) return;
+            _isCleanedUp = true;
+
+            Program.Log("CleanupAndRestoreDefaults: Resetting all applied machine values to default...");
+
+            try { SystemEvents.SessionEnding -= OnSessionEnding; } catch { }
+            try { _showWindowWaitHandle?.Unregister(null); } catch { }
+            try { _showWindowEvent?.Dispose(); } catch { }
+
+            try { _gammaEnforceTimer?.Stop(); } catch { }
+            try { _gammaEnforceTimer?.Dispose(); } catch { }
+            try { _observer.Stop(); } catch { }
+
+            try
+            {
+                if (_notifyIcon != null)
+                {
+                    _notifyIcon.Visible = false;
+                    _notifyIcon.Dispose();
+                }
+            }
+            catch { }
+
+            _currentGameExe = null;
+
+            // 1. Reset Vibrance (NVIDIA DVC / Windows DWM) back to default (50%)
+            try { _vibrance.ResetToDefault(); } catch { }
+            try { _vibrance.Dispose(); } catch { }
+
+            // 2. Reset Gamma & Black Boost back to linear identity default
+            try { _gammaEngine.ResetToIdentity(); } catch { }
+            try { _gammaEngine.Dispose(); } catch { }
+
+            // 3. Restore default screen resolution if changed during this session
+            try { DisplayEngine.RestoreDefaultResolution(); } catch { }
+
+            // 4. Re-enable any secondary monitors disabled during this session
+            try { MonitorEngine.RestoreOnExit(); } catch { }
+
+            // 5. Stop GoodbyeDPI if running
+            try { GoodbyeDpiEngine.StopOnExit(); } catch { }
         }
 
         private void OnFormClosing(object? sender, FormClosingEventArgs e)
@@ -756,19 +901,13 @@ namespace GUI.Forms
             if (!_isExplicitExit && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
+                this.ShowInTaskbar = false;
                 this.Hide();
                 return;
             }
 
             Program.Log($"MainForm.OnFormClosing triggered: CloseReason = {e.CloseReason}, Cancel = {e.Cancel}");
-            _gammaEnforceTimer?.Stop();
-            _gammaEnforceTimer?.Dispose();
-            _notifyIcon.Visible = false;
-            _notifyIcon.Dispose();
-            _observer.Stop();
-            ResetToDesktop();
-            _vibrance.Dispose();
-            _gammaEngine.Dispose();
+            CleanupAndRestoreDefaults();
         }
     }
 }

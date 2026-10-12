@@ -10,5 +10,6 @@ namespace GUI.Engine
         int GetLevel();
         bool SetLevel(int level);
         void Restore();
+        void ResetToDefault();
     }
 }
