@@ -118,7 +118,6 @@ namespace GUI.Forms
                 if (_startMinimized)
                 {
                     _startMinimized = false;
-                    this.ShowInTaskbar = false;
                     this.Hide();
                 }
             };
@@ -494,7 +493,6 @@ namespace GUI.Forms
             {
                 if (this.WindowState == FormWindowState.Minimized)
                 {
-                    this.ShowInTaskbar = false;
                     this.Hide();
                 }
             };
@@ -536,6 +534,10 @@ namespace GUI.Forms
             }
         }
 
+        private const int WM_SYSCOMMAND = 0x0112;
+        private const int SC_CLOSE = 0xF060;
+        private const int SC_MINIMIZE = 0xF020;
+
         protected override void WndProc(ref Message m)
         {
             if (Program.WM_SHOW_EXISTING_INSTANCE != 0 && m.Msg == Program.WM_SHOW_EXISTING_INSTANCE)
@@ -543,6 +545,12 @@ namespace GUI.Forms
                 RestoreFromTray();
                 return;
             }
+
+            if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_CLOSE && !_isExplicitExit)
+            {
+                m.WParam = (IntPtr)SC_MINIMIZE;
+            }
+
             base.WndProc(ref m);
         }
 
@@ -829,16 +837,17 @@ namespace GUI.Forms
         {
             if (this.IsDisposed || _isCleanedUp) return;
             _startMinimized = false;
-            this.ShowInTaskbar = true;
+            if (!this.ShowInTaskbar)
+            {
+                this.ShowInTaskbar = true;
+            }
             this.Show();
             if (this.WindowState == FormWindowState.Minimized)
             {
                 this.WindowState = FormWindowState.Normal;
             }
             this.BringToFront();
-            this.TopMost = true;
             this.Activate();
-            this.TopMost = false;
             if (this.IsHandleCreated)
             {
                 SetForegroundWindow(this.Handle);
@@ -901,7 +910,7 @@ namespace GUI.Forms
             if (!_isExplicitExit && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
-                this.ShowInTaskbar = false;
+                this.WindowState = FormWindowState.Minimized;
                 this.Hide();
                 return;
             }
