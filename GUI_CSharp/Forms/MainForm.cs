@@ -26,6 +26,7 @@ namespace GUI.Forms
         private ListView _lvGames;
         private Label _lblObserverStatus;
         private NotifyIcon _notifyIcon;
+        private System.Windows.Forms.Timer? _gammaEnforceTimer;
 
         private string? _currentGameExe = null;
 
@@ -35,6 +36,12 @@ namespace GUI.Forms
             _nvApi = new NvApiEngine();
             _gammaEngine = new GammaEngine();
             _observer = new ActiveWindowObserver();
+
+            _gammaEnforceTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _gammaEnforceTimer.Tick += (s, e) =>
+            {
+                if (_currentGameExe != null) _gammaEngine.EnforceIfNeeded();
+            };
 
             this.Icon = IconHelper.GetAppIcon();
 
@@ -391,24 +398,7 @@ namespace GUI.Forms
         private void InitObserver()
         {
             _observer.ForegroundAppChanged += OnForegroundAppChanged;
-            _observer.PollTick += OnObserverPollTick;
-            _observer.Start(200);
-        }
-
-        private void OnObserverPollTick()
-        {
-            try
-            {
-                // If gamma is active on current game, check and enforce if exclusive fullscreen wiped it
-                if (_currentGameExe != null && _config.Games.TryGetValue(_currentGameExe, out var prof))
-                {
-                    if (prof.GammaEnabled || prof.BoostEnabled)
-                    {
-                        _gammaEngine.EnforceIfNeeded();
-                    }
-                }
-            }
-            catch { }
+            _observer.Start();
         }
 
         private void OnForegroundAppChanged(string? exeName)
@@ -466,10 +456,12 @@ namespace GUI.Forms
                 double g = prof.GammaEnabled ? prof.Gamma : 2.20;
                 double b = prof.BoostEnabled ? (prof.Boost / 100.0) : 0.0;
                 _gammaEngine.ApplyCurve(g, b);
+                _gammaEnforceTimer?.Start();
             }
             else
             {
                 _gammaEngine.Restore();
+                _gammaEnforceTimer?.Stop();
             }
 
             _lblObserverStatus.Text = "Running!";
@@ -479,6 +471,7 @@ namespace GUI.Forms
         private void ResetToDesktop()
         {
             _currentGameExe = null;
+            _gammaEnforceTimer?.Stop();
             _nvApi.Restore();
             _gammaEngine.Restore();
             _lblObserverStatus.Text = "Running!";
@@ -495,6 +488,8 @@ namespace GUI.Forms
         private void OnFormClosing(object? sender, FormClosingEventArgs e)
         {
             Program.Log($"MainForm.OnFormClosing triggered: CloseReason = {e.CloseReason}, Cancel = {e.Cancel}");
+            _gammaEnforceTimer?.Stop();
+            _gammaEnforceTimer?.Dispose();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
             _observer.Stop();
