@@ -177,12 +177,22 @@ def get_game_icon_image(exe_name, exe_path=None, size=48):
     return ImageTk.PhotoImage(img)
 
 
+def center_window(win, width, height):
+    """Centers any Tkinter window directly in the middle of the screen."""
+    win.update_idletasks()
+    sw = win.winfo_screenwidth()
+    sh = win.winfo_screenheight()
+    x = max(0, (sw - width) // 2)
+    y = max(0, (sh - height) // 2)
+    win.geometry(f"{width}x{height}+{x}+{y}")
+
+
 class GameConfigModal(tk.Toplevel):
     """Minimalist dialog to configure a single game profile."""
     def __init__(self, parent, exe_name, data):
         super().__init__(parent)
         self.title(f"{exe_name}")
-        self.geometry("360x390")
+        center_window(self, 360, 390)
         self.configure(bg="#f0f0f0")
         self.resizable(False, False)
         self.transient(parent)
@@ -271,7 +281,7 @@ class RunningProcessesModal(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Select Running Game")
-        self.geometry("380x380")
+        center_window(self, 380, 380)
         self.configure(bg="#f0f0f0")
         self.transient(parent)
         self.grab_set()
@@ -325,7 +335,7 @@ class GUIApp:
     def __init__(self, root):
         self.root = root
         self.root.title("GUI")
-        self.root.geometry("380x520")
+        center_window(self.root, 380, 520)
         self.root.configure(bg="#f0f0f0")
         self.root.resizable(False, False)
 
