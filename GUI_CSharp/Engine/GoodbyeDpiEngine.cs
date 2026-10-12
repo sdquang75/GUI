@@ -31,27 +31,7 @@ namespace GUI.Engine
 
         public static string? ResolveExecutablePath()
         {
-            string archFolder = Environment.Is64BitOperatingSystem ? "x86_64" : "x86";
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-
-            // 1. Check root workspace structure: goodbyedpi-0.2.2/goodbyedpi-0.2.2/<arch>/goodbyedpi.exe
-            string[] candidates = new[]
-            {
-                Path.Combine(baseDir, "goodbyedpi-0.2.2", "goodbyedpi-0.2.2", archFolder, "goodbyedpi.exe"),
-                Path.Combine(baseDir, "goodbyedpi-0.2.2", archFolder, "goodbyedpi.exe"),
-                Path.Combine(baseDir, archFolder, "goodbyedpi.exe"),
-                Path.Combine(baseDir, "goodbyedpi.exe")
-            };
-
-            foreach (var candidate in candidates)
-            {
-                if (File.Exists(candidate))
-                {
-                    return Path.GetFullPath(candidate);
-                }
-            }
-
-            // 2. Fallback: extract embedded x86_64 resources to %LocalAppData%\GUI\goodbyedpi\x86_64
+            // 1. Extract embedded x86_64 resources to %LocalAppData%\GUI\goodbyedpi\x86_64
             try
             {
                 string extractDir = Path.Combine(
@@ -72,6 +52,14 @@ namespace GUI.Engine
             catch (Exception ex)
             {
                 Program.Log($"GoodbyeDpiEngine extract fallback failed: {ex.Message}");
+            }
+
+            // 2. Fallback: check local directory
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string localCandidate = Path.Combine(baseDir, "goodbyedpi.exe");
+            if (File.Exists(localCandidate))
+            {
+                return Path.GetFullPath(localCandidate);
             }
 
             return null;
@@ -395,6 +383,23 @@ namespace GUI.Engine
                 {
                     p.Dispose();
                 }
+            }
+
+            foreach (var svc in new[] { "WinDivert", "WinDivert1.4" })
+            {
+                try
+                {
+                    using var sc = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "sc.exe",
+                        Arguments = $"stop {svc}",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    });
+                    sc?.WaitForExit(1500);
+                }
+                catch { }
             }
         }
     }

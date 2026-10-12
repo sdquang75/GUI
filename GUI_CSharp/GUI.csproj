@@ -15,9 +15,9 @@
 
   <ItemGroup>
     <EmbeddedResource Include="app.ico" />
-    <EmbeddedResource Include="..\goodbyedpi-0.2.2\goodbyedpi-0.2.2\x86_64\goodbyedpi.exe" LogicalName="GUI.Goodbyedpi.goodbyedpi.exe" Condition="Exists('..\goodbyedpi-0.2.2\goodbyedpi-0.2.2\x86_64\goodbyedpi.exe')" />
-    <EmbeddedResource Include="..\goodbyedpi-0.2.2\goodbyedpi-0.2.2\x86_64\WinDivert.dll" LogicalName="GUI.Goodbyedpi.WinDivert.dll" Condition="Exists('..\goodbyedpi-0.2.2\goodbyedpi-0.2.2\x86_64\WinDivert.dll')" />
-    <EmbeddedResource Include="..\goodbyedpi-0.2.2\goodbyedpi-0.2.2\x86_64\WinDivert64.sys" LogicalName="GUI.Goodbyedpi.WinDivert64.sys" Condition="Exists('..\goodbyedpi-0.2.2\goodbyedpi-0.2.2\x86_64\WinDivert64.sys')" />
+    <EmbeddedResource Include="Resources\goodbyedpi\goodbyedpi.exe" LogicalName="GUI.Goodbyedpi.goodbyedpi.exe" Condition="Exists('Resources\goodbyedpi\goodbyedpi.exe')" />
+    <EmbeddedResource Include="Resources\goodbyedpi\WinDivert.dll" LogicalName="GUI.Goodbyedpi.WinDivert.dll" Condition="Exists('Resources\goodbyedpi\WinDivert.dll')" />
+    <EmbeddedResource Include="Resources\goodbyedpi\WinDivert64.sys" LogicalName="GUI.Goodbyedpi.WinDivert64.sys" Condition="Exists('Resources\goodbyedpi\WinDivert64.sys')" />
   </ItemGroup>
 
 </Project>
