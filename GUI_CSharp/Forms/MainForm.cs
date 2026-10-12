@@ -90,7 +90,7 @@ namespace GUI.Forms
 
             _chkAutostart = new CheckBox
             {
-                Text = "Autostart vibranceGUI",
+                Text = "Autostart GUI",
                 Location = new Point(12, 20),
                 AutoSize = true
             };
@@ -212,7 +212,8 @@ namespace GUI.Forms
             {
                 Text = "Observer status:",
                 Location = new Point(pad, 464),
-                AutoSize = true
+                AutoSize = true,
+                Cursor = Cursors.Hand
             };
 
             _lblObserverStatus = new Label
@@ -221,8 +222,22 @@ namespace GUI.Forms
                 Location = new Point(pad + 95, 464),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
-                ForeColor = Color.FromArgb(22, 163, 74)
+                ForeColor = Color.FromArgb(22, 163, 74),
+                Cursor = Cursors.Hand
             };
+
+            void ShowAuthorPopup()
+            {
+                MessageBox.Show(
+                    "author :Sdquang75 và gmail sdquang75@gmail.com",
+                    "Author Info",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+            }
+
+            lblObserverPrompt.DoubleClick += (s, e) => ShowAuthorPopup();
+            _lblObserverStatus.DoubleClick += (s, e) => ShowAuthorPopup();
 
             this.Controls.Add(gbSettings);
             this.Controls.Add(gbProg);
@@ -312,7 +327,7 @@ namespace GUI.Forms
                     Name = Path.GetFileNameWithoutExtension(exe),
                     Path = dlg.SelectedPath ?? "",
                     VibranceEnabled = true,
-                    Vibrance = 50,
+                    Vibrance = 75,
                     GammaEnabled = false,
                     Gamma = 1.80,
                     BoostEnabled = false,
@@ -346,7 +361,7 @@ namespace GUI.Forms
                     Name = Path.GetFileNameWithoutExtension(exe),
                     Path = ofd.FileName,
                     VibranceEnabled = true,
-                    Vibrance = 50,
+                    Vibrance = 75,
                     GammaEnabled = false,
                     Gamma = 1.80,
                     BoostEnabled = false,
