@@ -1,11 +1,11 @@
 """
-vibranceGUI (NVIDIA, 2.3.1.1) - Minimalist Edition
-Faithful to original vibranceGUI UI with:
-- Full English interface
-- Minimalist design matching reference layout
-- Windows Vibrance Level (Desktop)
-- Per-Game Program Settings with icon tiles
-- Fast Auto-detection observer with 0ms Alt-Tab revert
+GUI - Minimalist Vibrance & Display Profile Utility
+Replicating the exact vibranceGUI interface:
+- Renamed to "GUI"
+- Full English interface & minimalist design
+- Real executable icons extracted via Windows Shell API (pywin32)
+- Dynamic Observer status
+- Registry-based Windows Autostart
 """
 
 import sys
@@ -18,10 +18,15 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 import psutil
+import win32gui
+import win32ui
+import win32con
 
 from color_engine import GammaEngine, UnifiedVibranceEngine
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+ICONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+os.makedirs(ICONS_DIR, exist_ok=True)
 
 DEFAULT_CONFIG = {
     "desktop": {"vibrance": 50},
@@ -30,6 +35,7 @@ DEFAULT_CONFIG = {
     "games": {
         "valorant-win64-shipping.exe": {
             "name": "VALORANT",
+            "path": r"D:\Games\Valorant\Riot Games\VALORANT\live\ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe",
             "vibrance_enabled": True,
             "vibrance": 75,
             "gamma_enabled": False,
@@ -39,17 +45,9 @@ DEFAULT_CONFIG = {
         },
         "cs2.exe": {
             "name": "cs2",
+            "path": r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe",
             "vibrance_enabled": True,
             "vibrance": 80,
-            "gamma_enabled": True,
-            "gamma": 1.80,
-            "boost_enabled": False,
-            "boost": 0
-        },
-        "r5reloaded.exe": {
-            "name": "apex",
-            "vibrance_enabled": True,
-            "vibrance": 75,
             "gamma_enabled": True,
             "gamma": 1.80,
             "boost_enabled": False,
@@ -58,26 +56,13 @@ DEFAULT_CONFIG = {
     }
 }
 
-GAME_COLORS = {
-    "cs2": ("#f59e0b", "#1e293b", "CS2"),
-    "csgo": ("#f59e0b", "#1e293b", "CSGO"),
-    "valorant": ("#e11d48", "#ffffff", "VAL"),
-    "apex": ("#dc2626", "#ffffff", "APEX"),
-    "r5reloaded": ("#dc2626", "#ffffff", "APEX"),
-    "pubg": ("#d97706", "#ffffff", "PUBG"),
-    "bf6": ("#0284c7", "#ffffff", "BF6"),
-    "battlefield": ("#0284c7", "#ffffff", "BF"),
-    "dota2": ("#b91c1c", "#ffffff", "DOTA"),
-    "league": ("#0ea5e9", "#ffffff", "LOL"),
-    "overwatch": ("#ea580c", "#ffffff", "OW"),
-}
-
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                cfg = json.load(f)
+                return cfg
         except Exception:
             pass
     return DEFAULT_CONFIG.copy()
@@ -96,43 +81,99 @@ def update_windows_autostart(enable):
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
         if enable:
             bat_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "run.bat"))
-            winreg.SetValueEx(key, "vibranceGUI", 0, winreg.REG_SZ, f'"{bat_path}"')
+            winreg.SetValueEx(key, "GUI", 0, winreg.REG_SZ, f'"{bat_path}"')
         else:
             try:
-                winreg.DeleteValue(key, "vibranceGUI")
+                winreg.DeleteValue(key, "GUI")
             except FileNotFoundError:
                 pass
         winreg.CloseKey(key)
-    except Exception:
-        pass
+    except Exception as e:
+        print("Autostart registry update failed:", e)
 
 
-def generate_game_badge(exe_name, name_label=""):
-    key = exe_name.lower().replace(".exe", "")
-    for k, (bg_col, fg_col, txt) in GAME_COLORS.items():
-        if k in key:
-            return _render_badge(txt, bg_col, fg_col)
-
-    # Generic fallback badge
-    short_text = (name_label or key)[:4].upper()
-    return _render_badge(short_text, "#334155", "#f8fafc")
-
-
-def _render_badge(text, bg_color, fg_color):
-    img = Image.new("RGBA", (52, 52), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle([1, 1, 51, 51], radius=8, fill=bg_color)
-
+def extract_icon_from_exe(exe_path, size=48):
+    """Extracts actual 32-bit RGBA icon from a Windows .exe file."""
+    if not exe_path or not os.path.exists(exe_path):
+        return None
     try:
-        font = ImageFont.truetype("arialbd.ttf", 14 if len(text) <= 3 else 11)
+        large, small = win32gui.ExtractIconEx(exe_path, 0)
+        if not large:
+            return None
+        hicon = large[0]
+        hdc_screen = win32gui.GetDC(0)
+        hdc = win32ui.CreateDCFromHandle(hdc_screen)
+        memdc = hdc.CreateCompatibleDC()
+        hbmp = win32ui.CreateBitmap()
+        hbmp.CreateCompatibleBitmap(hdc, size, size)
+        memdc.SelectObject(hbmp)
+        win32gui.DrawIconEx(memdc.GetHandleOutput(), 0, 0, hicon, size, size, 0, 0, win32con.DI_NORMAL)
+
+        bmpinfo = hbmp.GetInfo()
+        bmpstr = hbmp.GetBitmapBits(True)
+        img = Image.frombuffer('RGBA', (bmpinfo['bmWidth'], bmpinfo['bmHeight']), bmpstr, 'raw', 'BGRA', 0, 1)
+
+        win32gui.DestroyIcon(hicon)
+        for s in small:
+            win32gui.DestroyIcon(s)
+        for l in large[1:]:
+            win32gui.DestroyIcon(l)
+        win32gui.ReleaseDC(0, hdc_screen)
+        return img
+    except Exception:
+        return None
+
+
+def get_game_icon_image(exe_name, exe_path=None, size=48):
+    """Retrieves or caches the real application icon from disk."""
+    cache_file = os.path.join(ICONS_DIR, f"{exe_name.lower()}.png")
+    if os.path.exists(cache_file):
+        try:
+            img = Image.open(cache_file)
+            if img.size != (size, size):
+                img = img.resize((size, size), Image.Resampling.LANCZOS)
+            return ImageTk.PhotoImage(img)
+        except Exception:
+            pass
+
+    # Try extracting from provided path
+    if exe_path and os.path.exists(exe_path):
+        extracted = extract_icon_from_exe(exe_path, size=size)
+        if extracted:
+            try:
+                extracted.save(cache_file)
+            except Exception:
+                pass
+            return ImageTk.PhotoImage(extracted)
+
+    # Search running processes for path if not provided
+    for p in psutil.process_iter(['name', 'exe']):
+        try:
+            if p.info['name'] and p.info['name'].lower() == exe_name.lower():
+                found_exe = p.info.get('exe')
+                if found_exe and os.path.exists(found_exe):
+                    extracted = extract_icon_from_exe(found_exe, size=size)
+                    if extracted:
+                        try:
+                            extracted.save(cache_file)
+                        except Exception:
+                            pass
+                        return ImageTk.PhotoImage(extracted)
+        except Exception:
+            pass
+
+    # Fallback clean badge
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([1, 1, size - 2, size - 2], radius=8, fill="#3b82f6")
+    short = (os.path.splitext(exe_name)[0])[:3].upper()
+    try:
+        font = ImageFont.truetype("arialbd.ttf", 13)
     except Exception:
         font = ImageFont.load_default()
-
-    bbox = draw.textbbox((0, 0), text, font=font)
+    bbox = draw.textbbox((0, 0), short, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (52 - tw) // 2
-    y = (52 - th) // 2 - 1
-    draw.text((x, y), text, font=font, fill=fg_color)
+    draw.text(((size - tw) // 2, (size - th) // 2 - 1), short, font=font, fill="#ffffff")
     return ImageTk.PhotoImage(img)
 
 
@@ -214,6 +255,7 @@ class GameConfigModal(tk.Toplevel):
     def _save(self):
         self.result = {
             "name": self.var_name.get(),
+            "path": self.data.get("path", ""),
             "vibrance_enabled": True,
             "vibrance": int(self.var_vib.get()),
             "gamma_enabled": self.var_gamma_on.get(),
@@ -229,14 +271,16 @@ class RunningProcessesModal(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Select Running Game")
-        self.geometry("360x360")
+        self.geometry("380x380")
         self.configure(bg="#f0f0f0")
         self.transient(parent)
         self.grab_set()
 
         self.selected_exe = None
+        self.selected_path = None
+        self.proc_map = {}
 
-        tk.Label(self, text="Select an active process:", font=("Segoe UI", 9), bg="#f0f0f0", padx=12, pady=8).pack(anchor="w")
+        tk.Label(self, text="Select an active game process:", font=("Segoe UI", 9), bg="#f0f0f0", padx=12, pady=8).pack(anchor="w")
 
         f_list = tk.Frame(self, bg="#f0f0f0", padx=12)
         f_list.pack(fill="both", expand=True)
@@ -258,11 +302,12 @@ class RunningProcessesModal(tk.Toplevel):
     def _populate(self):
         seen = set()
         ignore = ("explorer.exe", "svchost.exe", "python.exe", "pythonw.exe", "taskhostw.exe", "cmd.exe", "conhost.exe")
-        for p in psutil.process_iter(['name']):
+        for p in psutil.process_iter(['name', 'exe']):
             try:
                 n = p.info['name']
                 if n and n.lower() not in seen and n.lower() not in ignore:
                     seen.add(n.lower())
+                    self.proc_map[n.lower()] = p.info.get('exe', '')
                     self.lb.insert("end", n.lower())
             except Exception:
                 pass
@@ -270,15 +315,17 @@ class RunningProcessesModal(tk.Toplevel):
     def _choose(self):
         sel = self.lb.curselection()
         if sel:
-            self.selected_exe = self.lb.get(sel[0])
+            exe = self.lb.get(sel[0])
+            self.selected_exe = exe
+            self.selected_path = self.proc_map.get(exe, '')
             self.destroy()
 
 
-class VibranceGUIApp:
+class GUIApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("vibranceGUI (NVIDIA, 2.3.1.1)")
-        self.root.geometry("390x530")
+        self.root.title("GUI")
+        self.root.geometry("380x520")
         self.root.configure(bg="#f0f0f0")
         self.root.resizable(False, False)
 
@@ -291,7 +338,7 @@ class VibranceGUIApp:
         # State
         self.current_game_exe = None
         self.selected_card_exe = None
-        self.badge_images = {}  # Keep references for Tkinter
+        self.photo_refs = {}
 
         self.var_autostart = tk.BooleanVar(value=self.cfg.get("autostart", False))
         self.var_never_res = tk.BooleanVar(value=self.cfg.get("never_change_res", True))
@@ -304,6 +351,10 @@ class VibranceGUIApp:
         self._refresh_game_tiles()
         self._start_observer()
 
+        # Apply autostart if configured
+        if self.var_autostart.get():
+            update_windows_autostart(True)
+
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def _setup_style(self):
@@ -312,7 +363,6 @@ class VibranceGUIApp:
         style.configure("TLabel", background="#f0f0f0", font=("Segoe UI", 9))
         style.configure("TLabelframe", background="#f0f0f0")
         style.configure("TLabelframe.Label", background="#f0f0f0", font=("Segoe UI", 9))
-        style.configure("TCheckbutton", background="#f0f0f0", font=("Segoe UI", 9))
 
     def _build_ui(self):
         main_pad = tk.Frame(self.root, bg="#f0f0f0", padx=10, pady=8)
@@ -329,7 +379,7 @@ class VibranceGUIApp:
 
         row_chk2 = tk.Frame(box_settings, bg="#f0f0f0")
         row_chk2.pack(fill="x", pady=1)
-        chk_res = tk.Checkbutton(row_chk2, text="Never change resolutions", variable=self.var_never_res, font=("Segoe UI", 9), bg="#f0f0f0", activebackground="#f0f0f0")
+        chk_res = tk.Checkbutton(row_chk2, text="Never change resolutions", variable=self.var_never_res, font=("Segoe UI", 9), bg="#f0f0f0", activebackground="#f0f0f0", command=self._on_res_toggle)
         chk_res.pack(side="left")
 
         # Windows Vibrance Level Sub-box
@@ -357,7 +407,7 @@ class VibranceGUIApp:
         tk.Button(row_btns, text="Add manually", font=("Segoe UI", 9), width=12, bg="#ffffff", bd=1, relief="solid", cursor="hand2", command=self._add_manually).pack(side="left", padx=(0, 4))
         tk.Button(row_btns, text="Remove", font=("Segoe UI", 9), width=9, bg="#ffffff", bd=1, relief="solid", cursor="hand2", command=self._remove_selected).pack(side="left")
 
-        # Container for game cards (White box with border)
+        # White Container with actual Game Icons
         self.canvas_games = tk.Canvas(box_prog, bg="#ffffff", highlightthickness=1, highlightbackground="#b0b0b0")
         self.canvas_games.pack(fill="both", expand=True)
         self.canvas_games.bind("<Button-1>", self._on_canvas_click)
@@ -386,9 +436,13 @@ class VibranceGUIApp:
         save_config(self.cfg)
         update_windows_autostart(val)
 
+    def _on_res_toggle(self):
+        self.cfg["never_change_res"] = self.var_never_res.get()
+        save_config(self.cfg)
+
     def _refresh_game_tiles(self):
         self.canvas_games.delete("all")
-        self.badge_images.clear()
+        self.photo_refs.clear()
         self.tile_rects = []
 
         games = self.cfg.get("games", {})
@@ -405,24 +459,25 @@ class VibranceGUIApp:
             x = start_x + col * (tile_w + 12)
             y = start_y + row * (tile_h + 8)
 
-            badge = generate_game_badge(exe, prof.get("name", ""))
-            self.badge_images[exe] = badge
+            # Retrieve real exe icon
+            photo = get_game_icon_image(exe, prof.get("path"), size=48)
+            self.photo_refs[exe] = photo
 
             # Selection highlight box
             is_sel = (exe == self.selected_card_exe)
             if is_sel:
-                rect_id = self.canvas_games.create_rectangle(x - 4, y - 4, x + tile_w - 4, y + tile_h - 2, fill="#e0f2fe", outline="#0284c7", width=1)
+                self.canvas_games.create_rectangle(x - 4, y - 4, x + tile_w - 4, y + tile_h - 2, fill="#e0f2fe", outline="#0284c7", width=1)
             else:
-                rect_id = self.canvas_games.create_rectangle(x - 4, y - 4, x + tile_w - 4, y + tile_h - 2, fill="#ffffff", outline="#ffffff", width=1)
+                self.canvas_games.create_rectangle(x - 4, y - 4, x + tile_w - 4, y + tile_h - 2, fill="#ffffff", outline="#ffffff", width=1)
 
             # Icon Image
-            img_id = self.canvas_games.create_image(x + 4, y, image=badge, anchor="nw")
+            self.canvas_games.create_image(x + 6, y, image=photo, anchor="nw")
 
             # Label text
             display_name = prof.get("name", os.path.splitext(exe)[0])
             if len(display_name) > 8:
                 display_name = display_name[:7] + "..."
-            txt_id = self.canvas_games.create_text(x + 30, y + 56, text=display_name, font=("Segoe UI", 8), fill="#0f172a", anchor="n")
+            self.canvas_games.create_text(x + 30, y + 54, text=display_name, font=("Segoe UI", 8), fill="#0f172a", anchor="n")
 
             self.tile_rects.append((x - 4, y - 4, x + tile_w - 4, y + tile_h - 2, exe))
             idx += 1
@@ -457,8 +512,10 @@ class VibranceGUIApp:
         self.root.wait_window(modal)
         if modal.selected_exe:
             exe = modal.selected_exe
+            path = modal.selected_path
             default_data = {
                 "name": os.path.splitext(exe)[0],
+                "path": path,
                 "vibrance_enabled": True,
                 "vibrance": 75,
                 "gamma_enabled": False,
@@ -466,6 +523,12 @@ class VibranceGUIApp:
                 "boost_enabled": False,
                 "boost": 0
             }
+            # Cache icon immediately
+            if path and os.path.exists(path):
+                ext = extract_icon_from_exe(path, size=48)
+                if ext:
+                    ext.save(os.path.join(ICONS_DIR, f"{exe.lower()}.png"))
+
             c_modal = GameConfigModal(self.root, exe, default_data)
             self.root.wait_window(c_modal)
             if c_modal.result:
@@ -482,8 +545,14 @@ class VibranceGUIApp:
         )
         if f:
             exe = os.path.basename(f).lower()
+            # Cache real icon immediately
+            ext = extract_icon_from_exe(f, size=48)
+            if ext:
+                ext.save(os.path.join(ICONS_DIR, f"{exe.lower()}.png"))
+
             default_data = {
                 "name": os.path.splitext(exe)[0],
+                "path": f,
                 "vibrance_enabled": True,
                 "vibrance": 75,
                 "gamma_enabled": False,
@@ -525,7 +594,7 @@ class VibranceGUIApp:
             self.gamma_engine.restore()
 
         self.current_game_exe = exe
-        self.lbl_observer.config(text=f"{prof.get('name', exe)} Active!", fg="#0284c7")
+        self.lbl_observer.config(text="Running!", fg="#16a34a")
 
     def reset_to_desktop(self):
         self.current_game_exe = None
@@ -584,5 +653,5 @@ class VibranceGUIApp:
 
 if __name__ == '__main__':
     root = tk.Tk()
-    app = VibranceGUIApp(root)
+    app = GUIApp(root)
     root.mainloop()
