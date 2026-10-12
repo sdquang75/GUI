@@ -24,7 +24,7 @@ namespace GUI.Config
         public bool VibranceEnabled { get; set; } = true;
 
         [JsonPropertyName("vibrance")]
-        public int Vibrance { get; set; } = 75;
+        public int Vibrance { get; set; } = 50;
 
         [JsonPropertyName("gamma_enabled")]
         public bool GammaEnabled { get; set; } = false;

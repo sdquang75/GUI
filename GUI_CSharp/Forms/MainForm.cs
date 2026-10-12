@@ -16,7 +16,6 @@ namespace GUI.Forms
         private ActiveWindowObserver _observer;
 
         private CheckBox _chkAutostart;
-        private CheckBox _chkNeverRes;
         private TrackBar _tbDesktopVib;
         private Label _lblDesktopVibVal;
 
@@ -25,7 +24,6 @@ namespace GUI.Forms
         private Button _btnRemove;
 
         private ListView _lvGames;
-        private ImageList _imageList;
         private Label _lblObserverStatus;
         private NotifyIcon _notifyIcon;
 
@@ -39,12 +37,6 @@ namespace GUI.Forms
             _observer = new ActiveWindowObserver();
 
             this.Icon = IconHelper.GetAppIcon();
-
-            _imageList = new ImageList
-            {
-                ImageSize = new Size(48, 48),
-                ColorDepth = ColorDepth.Depth32Bit
-            };
 
             InitializeComponent();
             LoadConfigToUi();
@@ -85,7 +77,7 @@ namespace GUI.Forms
             {
                 Text = "Settings",
                 Location = new Point(pad, 8),
-                Size = new Size(clientW, 142),
+                Size = new Size(clientW, 118),
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
             };
 
@@ -102,24 +94,12 @@ namespace GUI.Forms
                 AutostartHelper.SetAutostart(_chkAutostart.Checked);
             };
 
-            _chkNeverRes = new CheckBox
-            {
-                Text = "Never change resolutions",
-                Location = new Point(12, 44),
-                AutoSize = true
-            };
-            _chkNeverRes.CheckedChanged += (s, e) =>
-            {
-                _config.NeverChangeRes = _chkNeverRes.Checked;
-                ConfigManager.Save(_config);
-            };
-
             // Sub-box: Windows Vibrance Level
             var gbWinVib = new GroupBox
             {
                 Text = "Windows Vibrance Level",
-                Location = new Point(10, 68),
-                Size = new Size(clientW - 20, 64)
+                Location = new Point(10, 46),
+                Size = new Size(clientW - 20, 62)
             };
 
             _lblDesktopVibVal = new Label
@@ -132,7 +112,7 @@ namespace GUI.Forms
 
             _tbDesktopVib = new TrackBar
             {
-                Minimum = 50,
+                Minimum = 0,
                 Maximum = 100,
                 Value = 50,
                 TickFrequency = 10,
@@ -157,15 +137,14 @@ namespace GUI.Forms
             gbWinVib.Controls.Add(_lblDesktopVibVal);
 
             gbSettings.Controls.Add(_chkAutostart);
-            gbSettings.Controls.Add(_chkNeverRes);
             gbSettings.Controls.Add(gbWinVib);
 
             // ---------------- 2. Program Settings Box ----------------
             var gbProg = new GroupBox
             {
                 Text = "Program Settings",
-                Location = new Point(pad, 156),
-                Size = new Size(clientW, 300),
+                Location = new Point(pad, 132),
+                Size = new Size(clientW, 324),
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
             };
 
@@ -202,9 +181,8 @@ namespace GUI.Forms
             _lvGames = new ListView
             {
                 Location = new Point(10, 52),
-                Size = new Size(clientW - 20, 238),
+                Size = new Size(clientW - 20, 262),
                 View = View.LargeIcon,
-                LargeImageList = _imageList,
                 MultiSelect = false,
                 HideSelection = false,
                 BorderStyle = BorderStyle.FixedSingle,
@@ -273,9 +251,8 @@ namespace GUI.Forms
         private void LoadConfigToUi()
         {
             _chkAutostart.Checked = _config.Autostart;
-            _chkNeverRes.Checked = _config.NeverChangeRes;
 
-            int deskVib = Math.Clamp(_config.Desktop.Vibrance, 50, 100);
+            int deskVib = Math.Clamp(_config.Desktop.Vibrance, 0, 100);
             _tbDesktopVib.Value = deskVib;
             _lblDesktopVibVal.Text = $"{deskVib} %";
 
@@ -286,8 +263,14 @@ namespace GUI.Forms
         {
             _lvGames.BeginUpdate();
             _lvGames.Items.Clear();
-            _imageList.Images.Clear();
 
+            var newImageList = new ImageList
+            {
+                ImageSize = new Size(48, 48),
+                ColorDepth = ColorDepth.Depth32Bit
+            };
+
+            int index = 0;
             foreach (var kvp in _config.Games)
             {
                 string exeKey = kvp.Key.ToLowerInvariant();
@@ -295,16 +278,19 @@ namespace GUI.Forms
 
                 // Extract or load icon
                 var iconImg = IconHelper.GetGameIcon(exeKey, prof.Path, 48);
-                _imageList.Images.Add(exeKey, iconImg);
+                newImageList.Images.Add(exeKey, iconImg);
 
                 string label = string.IsNullOrEmpty(prof.Name) ? Path.GetFileNameWithoutExtension(exeKey) : prof.Name;
-                var item = new ListViewItem(label, exeKey)
+                var item = new ListViewItem(label)
                 {
+                    ImageIndex = index,
                     Tag = exeKey
                 };
                 _lvGames.Items.Add(item);
+                index++;
             }
 
+            _lvGames.LargeImageList = newImageList;
             _lvGames.EndUpdate();
         }
 
@@ -319,7 +305,7 @@ namespace GUI.Forms
                     Name = Path.GetFileNameWithoutExtension(exe),
                     Path = dlg.SelectedPath ?? "",
                     VibranceEnabled = true,
-                    Vibrance = 75,
+                    Vibrance = 50,
                     GammaEnabled = false,
                     Gamma = 1.80,
                     BoostEnabled = false,
@@ -353,7 +339,7 @@ namespace GUI.Forms
                     Name = Path.GetFileNameWithoutExtension(exe),
                     Path = ofd.FileName,
                     VibranceEnabled = true,
-                    Vibrance = 75,
+                    Vibrance = 50,
                     GammaEnabled = false,
                     Gamma = 1.80,
                     BoostEnabled = false,

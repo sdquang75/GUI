@@ -95,8 +95,7 @@ namespace GUI.Forms
                     if (!seen.Contains(name) && Array.IndexOf(ignored, name) < 0)
                     {
                         seen.Add(name);
-                        string path = "";
-                        try { path = p.MainModule?.FileName ?? ""; } catch { }
+                        string path = Utils.ProcessHelper.GetProcessPath(p.Id);
                         _procMap[name] = path;
                         _listBox.Items.Add(name);
                     }

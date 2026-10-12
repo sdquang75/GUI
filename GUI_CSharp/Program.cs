@@ -61,9 +61,14 @@ namespace GUI
 
                 using var gamma = new Engine.GammaEngine();
                 bool gammaRes = gamma.ApplyCurve(1.80, 0.0);
-                Console.WriteLine($"Gamma 1.8 Apply: {gammaRes}");
+                Log($"Gamma 1.8 Apply: {gammaRes}");
                 gamma.Restore();
-                Console.WriteLine("=== Test Complete ===");
+
+                var testIcon = Utils.IconHelper.GetGameIcon("cs2.exe", @"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe", 48);
+                Log($"CS2 Icon Loaded: {testIcon.Width}x{testIcon.Height}");
+                var npIcon = Utils.IconHelper.GetGameIcon("notepad.exe", @"C:\Windows\System32\notepad.exe", 48);
+                Log($"Notepad Icon Loaded: {npIcon.Width}x{npIcon.Height}");
+                Log("=== Test Complete ===");
                 return;
             }
 

@@ -38,19 +38,16 @@ namespace GUI.Utils
             {
                 try
                 {
-                    using var stream = new FileStream(cachePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    var img = Image.FromStream(stream);
-                    if (img.Width == size && img.Height == size)
-                    {
-                        return new Bitmap(img);
-                    }
-                    var resized = new Bitmap(size, size);
-                    using (var g = Graphics.FromImage(resized))
+                    byte[] bytes = File.ReadAllBytes(cachePath);
+                    using var ms = new MemoryStream(bytes);
+                    using var orig = Image.FromStream(ms);
+                    var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                    using (var g = Graphics.FromImage(bmp))
                     {
                         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.DrawImage(img, 0, 0, size, size);
+                        g.DrawImage(orig, 0, 0, size, size);
                     }
-                    return resized;
+                    return bmp;
                 }
                 catch { }
             }
@@ -74,7 +71,7 @@ namespace GUI.Utils
                 {
                     if (proc.ProcessName.ToLowerInvariant() == simpleName)
                     {
-                        string? procPath = proc.MainModule?.FileName;
+                        string procPath = ProcessHelper.GetProcessPath(proc.Id);
                         if (!string.IsNullOrEmpty(procPath) && File.Exists(procPath))
                         {
                             var extracted = ExtractFromExe(procPath, size);

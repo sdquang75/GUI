@@ -34,7 +34,7 @@ namespace GUI.Forms
             {
                 Name = Path.GetFileNameWithoutExtension(exeName),
                 VibranceEnabled = true,
-                Vibrance = 75,
+                Vibrance = 50,
                 GammaEnabled = false,
                 Gamma = 1.80,
                 BoostEnabled = false,
@@ -69,7 +69,7 @@ namespace GUI.Forms
 
             _lblVibranceVal = new Label
             {
-                Text = "75%",
+                Text = "50%",
                 Location = new Point(255, 14),
                 Size = new Size(50, 20),
                 TextAlign = ContentAlignment.MiddleRight,
@@ -78,9 +78,9 @@ namespace GUI.Forms
 
             _tbVibrance = new TrackBar
             {
-                Minimum = 50,
+                Minimum = 0,
                 Maximum = 100,
-                Value = 75,
+                Value = 50,
                 TickFrequency = 10,
                 Location = new Point(10, 32),
                 Size = new Size(296, 35)
@@ -101,7 +101,7 @@ namespace GUI.Forms
 
             _chkGamma = new CheckBox
             {
-                Text = "Enable Gamma 1.8",
+                Text = "Enable Gamma",
                 Location = new Point(12, 22),
                 AutoSize = true
             };
@@ -201,7 +201,7 @@ namespace GUI.Forms
 
         private void LoadProfileData()
         {
-            _tbVibrance.Value = Math.Clamp(_profile.Vibrance, 50, 100);
+            _tbVibrance.Value = Math.Clamp(_profile.Vibrance, 0, 100);
             _lblVibranceVal.Text = $"{_tbVibrance.Value}%";
 
             _chkGamma.Checked = _profile.GammaEnabled;
