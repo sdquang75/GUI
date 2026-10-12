@@ -47,6 +47,17 @@ namespace GUI
                 Log("AppDomain.ProcessExit triggered");
             };
 
+            if (args.Length >= 3 && args[0] == "--monitor-op")
+            {
+                string op = args[1].ToLowerInvariant();
+                string instanceId = args[2];
+                bool enable = (op == "enable");
+                var (success, msg) = Engine.MonitorEngine.SetDevNodeEnabledDirect(instanceId, enable);
+                Log($"--monitor-op {op} {instanceId} -> {success} ({msg})");
+                Environment.Exit(success ? 0 : 1);
+                return;
+            }
+
             if (args.Length > 0 && args[0] == "--test")
             {
                 AttachConsole(-1);
@@ -72,8 +83,18 @@ namespace GUI
 
                 var testIcon = Utils.IconHelper.GetGameIcon("cs2.exe", @"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe", 48);
                 Log($"CS2 Icon Loaded: {testIcon.Width}x{testIcon.Height}");
-                var npIcon = Utils.IconHelper.GetGameIcon("notepad.exe", @"C:\Windows\System32\notepad.exe", 48);
-                Log($"Notepad Icon Loaded: {npIcon.Width}x{npIcon.Height}");
+                var curRes = Engine.DisplayEngine.GetCurrentResolution();
+                if (curRes.HasValue)
+                {
+                    Console.WriteLine($"Display Resolution: {curRes.Value.Width}x{curRes.Value.Height} @ {curRes.Value.Frequency}Hz ({Engine.DisplayEngine.GetAspectRatioLabel(curRes.Value.Width, curRes.Value.Height)})");
+                }
+                var monitors = Engine.MonitorEngine.EnumerateMonitors();
+                Console.WriteLine($"Monitors detected: {monitors.Count}");
+                foreach (var m in monitors)
+                {
+                    Console.WriteLine($"  - {m.FriendlyName} [{(m.Enabled ? "Enabled" : "Disabled")}] (ID: {m.InstanceId})");
+                }
+
                 Log("=== Test Complete ===");
                 return;
             }

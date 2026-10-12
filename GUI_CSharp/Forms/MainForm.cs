@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -15,20 +16,46 @@ namespace GUI.Forms
         private GammaEngine _gammaEngine;
         private ActiveWindowObserver _observer;
 
+        // --- Left Panel: Vibrance & Games ---
         private CheckBox _chkAutostart;
         private TrackBar _tbDesktopVib;
         private Label _lblDesktopVibVal;
-
         private Button _btnAdd;
         private Button _btnAddManual;
         private Button _btnRemove;
-
         private ListView _lvGames;
         private Label _lblObserverStatus;
         private NotifyIcon _notifyIcon;
         private System.Windows.Forms.Timer? _gammaEnforceTimer;
-
         private string? _currentGameExe = null;
+
+        // --- Right Panel: Quick Resolutions ---
+        private Label _lblCurrentRes;
+        private Button _btnRefreshRes;
+        private List<Button> _resButtons = new();
+        private TextBox _txtCustomRes;
+        private Button _btnApplyCustom;
+        private Button _btnOpenGpuPanel;
+        private Label _lblResStatus;
+        private Button _btnOpenMonitors;
+
+        private static readonly (int Width, int Height)[] QuickResolutions = new[]
+        {
+            (1920, 1080),
+            (2560, 1440),
+            (1920, 1440),
+            (1620, 1080),
+            (1568, 1080),
+            (1440, 1080),
+            (1600, 1080),
+            (1280, 1080),
+            (1350, 1080),
+            (1280, 1024),
+            (1080, 1080),
+            (1280, 960),
+            (1024, 768),
+            (800, 1080)
+        };
 
         public MainForm()
         {
@@ -53,6 +80,7 @@ namespace GUI.Forms
             {
                 Program.Log("MainForm.Shown fired");
                 InitObserver();
+                RefreshCurrentResolution();
             };
 
             if (_config.Autostart)
@@ -60,7 +88,6 @@ namespace GUI.Forms
                 AutostartHelper.SetAutostart(true);
             }
 
-            // Set initial desktop vibrance
             _vibrance.DesktopLevel = _config.Desktop.Vibrance;
             _vibrance.SetLevel(_config.Desktop.Vibrance);
             Program.Log("MainForm constructor completed");
@@ -68,8 +95,8 @@ namespace GUI.Forms
 
         private void InitializeComponent()
         {
-            this.Text = "GUI";
-            this.Size = new Size(380, 530);
+            this.Text = "GUI - Vibrance & QuickRes";
+            this.ClientSize = new Size(722, 500);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -77,15 +104,16 @@ namespace GUI.Forms
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
 
             int pad = 10;
-            int clientW = 344;
+            int colW = 344;
 
-            // ---------------- 1. Settings Box ----------------
+            // ==========================================
+            // 1. LEFT SIDE: Settings & Program Settings
+            // ==========================================
             var gbSettings = new GroupBox
             {
                 Text = "Settings",
                 Location = new Point(pad, 8),
-                Size = new Size(clientW, 118),
-                Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
+                Size = new Size(colW, 118)
             };
 
             _chkAutostart = new CheckBox
@@ -101,12 +129,11 @@ namespace GUI.Forms
                 AutostartHelper.SetAutostart(_chkAutostart.Checked);
             };
 
-            // Sub-box: Windows Vibrance Level
             var gbWinVib = new GroupBox
             {
                 Text = "Windows Vibrance Level",
                 Location = new Point(10, 46),
-                Size = new Size(clientW - 20, 62)
+                Size = new Size(colW - 20, 62)
             };
 
             _lblDesktopVibVal = new Label
@@ -142,17 +169,14 @@ namespace GUI.Forms
 
             gbWinVib.Controls.Add(_tbDesktopVib);
             gbWinVib.Controls.Add(_lblDesktopVibVal);
-
             gbSettings.Controls.Add(_chkAutostart);
             gbSettings.Controls.Add(gbWinVib);
 
-            // ---------------- 2. Program Settings Box ----------------
             var gbProg = new GroupBox
             {
                 Text = "Program Settings",
                 Location = new Point(pad, 132),
-                Size = new Size(clientW, 324),
-                Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
+                Size = new Size(colW, 324)
             };
 
             _btnAdd = new Button
@@ -188,7 +212,7 @@ namespace GUI.Forms
             _lvGames = new ListView
             {
                 Location = new Point(10, 52),
-                Size = new Size(clientW - 20, 262),
+                Size = new Size(colW - 20, 262),
                 View = View.LargeIcon,
                 MultiSelect = false,
                 HideSelection = false,
@@ -207,18 +231,17 @@ namespace GUI.Forms
             gbProg.Controls.Add(_btnRemove);
             gbProg.Controls.Add(_lvGames);
 
-            // ---------------- 3. Bottom Status ----------------
             var lblObserverPrompt = new Label
             {
                 Text = "Observer status:",
-                Location = new Point(pad, 464),
+                Location = new Point(pad, 466),
                 AutoSize = true
             };
 
             _lblObserverStatus = new Label
             {
                 Text = $"Running! [{_vibrance.EngineName}]",
-                Location = new Point(pad + 95, 464),
+                Location = new Point(pad + 95, 466),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
                 ForeColor = Color.FromArgb(22, 163, 74)
@@ -229,7 +252,163 @@ namespace GUI.Forms
             this.Controls.Add(lblObserverPrompt);
             this.Controls.Add(_lblObserverStatus);
 
+            // ==========================================
+            // 2. RIGHT SIDE: Quick Resolutions
+            // ==========================================
+            int rightX = pad + colW + 14;
+
+            var gbQuickRes = new GroupBox
+            {
+                Text = "Quick Resolutions",
+                Location = new Point(rightX, 8),
+                Size = new Size(colW, 448)
+            };
+
+            _lblCurrentRes = new Label
+            {
+                Text = "Detecting resolution...",
+                Location = new Point(10, 20),
+                Size = new Size(236, 24),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
+                ForeColor = Color.FromArgb(30, 41, 59)
+            };
+
+            _btnRefreshRes = new Button
+            {
+                Text = "Refresh",
+                Location = new Point(252, 17),
+                Size = new Size(82, 26),
+                BackColor = Color.White,
+                FlatStyle = FlatStyle.System
+            };
+            _btnRefreshRes.Click += (s, e) => RefreshCurrentResolution();
+
+            gbQuickRes.Controls.Add(_lblCurrentRes);
+            gbQuickRes.Controls.Add(_btnRefreshRes);
+
+            // Grid of Resolution Buttons (2 columns x 7 rows)
+            var pnlGrid = new TableLayoutPanel
+            {
+                Location = new Point(8, 48),
+                Size = new Size(328, 276),
+                ColumnCount = 2,
+                RowCount = 7,
+                Padding = new Padding(0),
+                Margin = new Padding(0)
+            };
+            pnlGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            pnlGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+
+            for (int i = 0; i < 7; i++)
+            {
+                pnlGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F / 7F));
+            }
+
+            _resButtons.Clear();
+            foreach (var (w, h) in QuickResolutions)
+            {
+                var btn = new Button
+                {
+                    Text = $"{w} x {h}",
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(2),
+                    BackColor = Color.White,
+                    FlatStyle = FlatStyle.System,
+                    Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point),
+                    Tag = (w, h)
+                };
+                btn.Click += (s, e) => ApplyResolution(w, h);
+                _resButtons.Add(btn);
+                pnlGrid.Controls.Add(btn);
+            }
+            gbQuickRes.Controls.Add(pnlGrid);
+
+            // Custom Resolution Row
+            var lblCustomPrompt = new Label
+            {
+                Text = "Custom:",
+                Location = new Point(10, 332),
+                AutoSize = true
+            };
+
+            _txtCustomRes = new TextBox
+            {
+                Text = "1440x1080",
+                Location = new Point(62, 329),
+                Size = new Size(110, 24)
+            };
+
+            _btnApplyCustom = new Button
+            {
+                Text = "Apply",
+                Location = new Point(178, 328),
+                Size = new Size(72, 26),
+                BackColor = Color.White,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
+                FlatStyle = FlatStyle.System
+            };
+            _btnApplyCustom.Click += (s, e) =>
+            {
+                var parsed = ParseRes(_txtCustomRes.Text);
+                if (parsed.HasValue)
+                {
+                    ApplyResolution(parsed.Value.Width, parsed.Value.Height);
+                }
+                else
+                {
+                    MessageBox.Show(this, "Please enter a valid resolution, e.g. 1440x1080.", "Invalid Resolution", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+
+            _btnOpenGpuPanel = new Button
+            {
+                Text = "GPU Panel",
+                Location = new Point(254, 328),
+                Size = new Size(80, 26),
+                BackColor = Color.White,
+                FlatStyle = FlatStyle.System
+            };
+            _btnOpenGpuPanel.Click += (s, e) => DisplayEngine.OpenGpuControlPanel();
+
+            _lblResStatus = new Label
+            {
+                Text = "Click any resolution button to switch instantly.",
+                Location = new Point(10, 365),
+                Size = new Size(324, 72),
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point),
+                ForeColor = Color.FromArgb(71, 85, 105)
+            };
+
+            gbQuickRes.Controls.Add(lblCustomPrompt);
+            gbQuickRes.Controls.Add(_txtCustomRes);
+            gbQuickRes.Controls.Add(_btnApplyCustom);
+            gbQuickRes.Controls.Add(_btnOpenGpuPanel);
+            gbQuickRes.Controls.Add(_lblResStatus);
+
+            this.Controls.Add(gbQuickRes);
+
+            // ==========================================
+            // 3. BOTTOM RIGHT: Small "Monitors" button
+            // ==========================================
+            _btnOpenMonitors = new Button
+            {
+                Text = "🖥️ Monitors",
+                Location = new Point(rightX + colW - 120, 462),
+                Size = new Size(120, 28),
+                BackColor = Color.White,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
+                FlatStyle = FlatStyle.System
+            };
+            _btnOpenMonitors.Click += (s, e) =>
+            {
+                using var dlg = new MonitorsForm();
+                dlg.ShowDialog(this);
+            };
+            this.Controls.Add(_btnOpenMonitors);
+
+            // ==========================================
             // System Tray
+            // ==========================================
             var trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("Open GUI", null, (s, e) => RestoreFromTray());
             trayMenu.Items.Add(new ToolStripSeparator());
@@ -253,6 +432,57 @@ namespace GUI.Forms
             };
 
             this.FormClosing += OnFormClosing;
+        }
+
+        private void RefreshCurrentResolution()
+        {
+            var cur = DisplayEngine.GetCurrentResolution();
+            if (cur.HasValue)
+            {
+                string ratio = DisplayEngine.GetAspectRatioLabel(cur.Value.Width, cur.Value.Height);
+                _lblCurrentRes.Text = $"{cur.Value.Width} x {cur.Value.Height} @ {cur.Value.Frequency}Hz ({ratio})";
+
+                foreach (var btn in _resButtons)
+                {
+                    if (btn.Tag is ValueTuple<int, int> res)
+                    {
+                        if (res.Item1 == cur.Value.Width && res.Item2 == cur.Value.Height)
+                        {
+                            btn.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
+                            btn.Text = $"✓ {res.Item1} x {res.Item2}";
+                        }
+                        else
+                        {
+                            btn.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+                            btn.Text = $"{res.Item1} x {res.Item2}";
+                        }
+                    }
+                }
+            }
+            else
+            {
+                _lblCurrentRes.Text = "Unknown resolution";
+            }
+        }
+
+        private void ApplyResolution(int width, int height)
+        {
+            var (ok, msg) = DisplayEngine.SetResolution(width, height);
+            _lblResStatus.Text = msg;
+            _lblResStatus.ForeColor = ok ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
+            RefreshCurrentResolution();
+        }
+
+        private (int Width, int Height)? ParseRes(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return null;
+            var parts = input.ToLower().Split(new[] { 'x', '*', ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h))
+            {
+                if (w >= 640 && w <= 7680 && h >= 480 && h <= 4320)
+                    return (w, h);
+            }
+            return null;
         }
 
         private void LoadConfigToUi()
@@ -283,7 +513,6 @@ namespace GUI.Forms
                 string exeKey = kvp.Key.ToLowerInvariant();
                 var prof = kvp.Value;
 
-                // Extract or load icon
                 var iconImg = IconHelper.GetGameIcon(exeKey, prof.Path, 48);
                 newImageList.Images.Add(exeKey, iconImg);
 
@@ -440,7 +669,6 @@ namespace GUI.Forms
         {
             _currentGameExe = exe;
 
-            // 1. Vibrance
             if (prof.VibranceEnabled)
             {
                 _vibrance.SetLevel(prof.Vibrance);
@@ -450,7 +678,6 @@ namespace GUI.Forms
                 _vibrance.SetLevel(_config.Desktop.Vibrance);
             }
 
-            // 2. Gamma / Black Boost
             if (prof.GammaEnabled || prof.BoostEnabled)
             {
                 double g = prof.GammaEnabled ? prof.Gamma : 2.20;
