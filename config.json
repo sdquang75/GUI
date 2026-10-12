@@ -1,0 +1,35 @@
+{
+    "desktop": {
+        "vibrance": 50
+    },
+    "auto_detect": false,
+    "games": {
+        "cs2.exe": {
+            "name": "Counter-Strike 2",
+            "vibrance_enabled": true,
+            "vibrance": 80,
+            "gamma_enabled": true,
+            "gamma": 1.8,
+            "boost_enabled": false,
+            "boost": 0
+        },
+        "valorant-win64-shipping.exe": {
+            "name": "VALORANT",
+            "vibrance_enabled": true,
+            "vibrance": 75,
+            "gamma_enabled": false,
+            "gamma": 2.2,
+            "boost_enabled": false,
+            "boost": 0
+        },
+        "r5reloaded.exe": {
+            "name": "Apex Legends",
+            "vibrance_enabled": true,
+            "vibrance": 75,
+            "gamma_enabled": true,
+            "gamma": 1.8,
+            "boost_enabled": true,
+            "boost": 100
+        }
+    }
+}
