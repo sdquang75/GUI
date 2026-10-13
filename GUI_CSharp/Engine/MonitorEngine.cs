@@ -268,6 +268,13 @@ namespace GUI.Engine
             {
                 if (_disabledInSession.Count == 0) return;
 
+                // If not running as admin, do NOT trigger a UAC prompt during app exit or OS shutdown
+                if (!IsAdministrator())
+                {
+                    Program.Log("MonitorEngine.RestoreOnExit: Skipping restore because process is not elevated (avoid UAC prompt on exit).");
+                    return;
+                }
+
                 var toEnable = new List<string>(_disabledInSession);
                 foreach (var id in toEnable)
                 {

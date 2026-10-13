@@ -83,7 +83,7 @@ namespace GUI.Utils
             uint dwEventThread,
             uint dwmsEventTime)
         {
-            if (eventType == EVENT_SYSTEM_FOREGROUND && hwnd != IntPtr.Zero)
+            if (eventType == EVENT_SYSTEM_FOREGROUND)
             {
                 CheckForegroundWindow(hwnd);
             }
@@ -91,28 +91,31 @@ namespace GUI.Utils
 
         private void CheckForegroundWindow(IntPtr hwnd)
         {
-            if (hwnd == IntPtr.Zero) return;
-
-            uint pid;
-            GetWindowThreadProcessId(hwnd, out pid);
-            if (pid == 0) return;
-
-            // Retrieve process exe path safely via QueryFullProcessImageName
-            string path = ProcessHelper.GetProcessPath((int)pid);
             string? exeName = null;
 
-            if (!string.IsNullOrEmpty(path))
+            if (hwnd != IntPtr.Zero)
             {
-                exeName = Path.GetFileName(path).ToLowerInvariant();
-            }
-            else
-            {
-                try
+                uint pid;
+                GetWindowThreadProcessId(hwnd, out pid);
+                if (pid != 0)
                 {
-                    using var proc = Process.GetProcessById((int)pid);
-                    exeName = (proc.ProcessName + ".exe").ToLowerInvariant();
+                    // Retrieve process exe path safely via QueryFullProcessImageName
+                    string path = ProcessHelper.GetProcessPath((int)pid);
+
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        exeName = Path.GetFileName(path).ToLowerInvariant();
+                    }
+                    else
+                    {
+                        try
+                        {
+                            using var proc = Process.GetProcessById((int)pid);
+                            exeName = (proc.ProcessName + ".exe").ToLowerInvariant();
+                        }
+                        catch { }
+                    }
                 }
-                catch { }
             }
 
             if (!string.Equals(exeName, _lastProcessExe, StringComparison.OrdinalIgnoreCase))
@@ -124,11 +127,15 @@ namespace GUI.Utils
 
         public void Stop()
         {
-            if (_hookHandle != IntPtr.Zero)
+            try
             {
-                UnhookWinEvent(_hookHandle);
-                _hookHandle = IntPtr.Zero;
+                if (_hookHandle != IntPtr.Zero)
+                {
+                    UnhookWinEvent(_hookHandle);
+                    _hookHandle = IntPtr.Zero;
+                }
             }
+            catch { }
             _hookDelegate = null;
         }
 

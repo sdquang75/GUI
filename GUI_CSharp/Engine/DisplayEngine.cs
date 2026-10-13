@@ -195,12 +195,12 @@ namespace GUI.Engine
                 devmode.dmFields |= DM_DISPLAYFREQUENCY;
             }
 
-            int res = ChangeDisplaySettings(ref devmode, CDS_UPDATEREGISTRY | CDS_NORESET);
+            int res = ChangeDisplaySettings(ref devmode, 0);
             if (res != DISP_CHANGE_SUCCESSFUL && refreshRate > 0)
             {
                 // Retry without forcing refresh rate
                 devmode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
-                res = ChangeDisplaySettings(ref devmode, CDS_UPDATEREGISTRY | CDS_NORESET);
+                res = ChangeDisplaySettings(ref devmode, 0);
             }
 
             if (res != DISP_CHANGE_SUCCESSFUL)
@@ -208,35 +208,29 @@ namespace GUI.Engine
                 return (false, $"Resolution change failed (Error code {res}). Resolution might not be registered in GPU driver.");
             }
 
-            res = ChangeDisplaySettings(IntPtr.Zero, CDS_RESET);
-            if (res == DISP_CHANGE_SUCCESSFUL)
-            {
-                _hasModifiedResolution = true;
-                int actualHz = refreshRate > 0 ? refreshRate : origFreq;
-                return (true, $"Applied {width} x {height} @ {actualHz}Hz");
-            }
-
-            // Rollback
-            Rollback(origWidth, origHeight, origFreq);
-            return (false, $"Apply failed (Error code {res}). Rolled back to {origWidth} x {origHeight}.");
+            _hasModifiedResolution = true;
+            var curModeApplied = GetCurrentResolution();
+            int actualHz = curModeApplied?.Frequency ?? (refreshRate > 0 ? refreshRate : origFreq);
+            return (true, $"Applied {width} x {height} @ {actualHz}Hz");
         }
 
         private static void Rollback(int width, int height, int freq)
         {
-            var devmode = new DEVMODE();
-            devmode.dmSize = (ushort)Marshal.SizeOf<DEVMODE>();
-            devmode.dmPelsWidth = (uint)width;
-            devmode.dmPelsHeight = (uint)height;
-            devmode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
-            if (freq > 1)
+            // Restore default from registry first (cleanest dynamic rollback)
+            int res = ChangeDisplaySettings(IntPtr.Zero, 0);
+            if (res != DISP_CHANGE_SUCCESSFUL)
             {
-                devmode.dmDisplayFrequency = (uint)freq;
-                devmode.dmFields |= DM_DISPLAYFREQUENCY;
-            }
-            int res = ChangeDisplaySettings(ref devmode, CDS_UPDATEREGISTRY | CDS_NORESET);
-            if (res == DISP_CHANGE_SUCCESSFUL)
-            {
-                ChangeDisplaySettings(IntPtr.Zero, CDS_RESET);
+                var devmode = new DEVMODE();
+                devmode.dmSize = (ushort)Marshal.SizeOf<DEVMODE>();
+                devmode.dmPelsWidth = (uint)width;
+                devmode.dmPelsHeight = (uint)height;
+                devmode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+                if (freq > 1)
+                {
+                    devmode.dmDisplayFrequency = (uint)freq;
+                    devmode.dmFields |= DM_DISPLAYFREQUENCY;
+                }
+                ChangeDisplaySettings(ref devmode, 0);
             }
         }
 

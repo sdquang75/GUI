@@ -17,6 +17,12 @@ namespace GUI.Forms
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool ChangeWindowMessageFilter(uint message, uint dwFlag);
 
@@ -71,7 +77,34 @@ namespace GUI.Forms
             _gammaEnforceTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _gammaEnforceTimer.Tick += (s, e) =>
             {
-                if (!_isCleanedUp && _currentGameExe != null) _gammaEngine.EnforceIfNeeded();
+                if (!_isCleanedUp && _currentGameExe != null)
+                {
+                    IntPtr fg = GetForegroundWindow();
+                    if (fg == IntPtr.Zero)
+                    {
+                        ResetToDesktop();
+                        return;
+                    }
+
+                    uint pid;
+                    GetWindowThreadProcessId(fg, out pid);
+                    string? currentFgExe = null;
+                    if (pid != 0)
+                    {
+                        string path = Utils.ProcessHelper.GetProcessPath((int)pid);
+                        currentFgExe = !string.IsNullOrEmpty(path)
+                            ? Path.GetFileName(path).ToLowerInvariant()
+                            : null;
+                    }
+
+                    if (!string.Equals(currentFgExe, _currentGameExe, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ResetToDesktop();
+                        return;
+                    }
+
+                    _gammaEngine.EnforceIfNeeded();
+                }
             };
 
             this.Icon = IconHelper.GetAppIcon();
@@ -854,23 +887,42 @@ namespace GUI.Forms
             try { _showWindowWaitHandle?.Unregister(null); } catch { }
             try { _showWindowEvent?.Dispose(); } catch { }
 
-            try { _gammaEnforceTimer?.Stop(); } catch { }
-            try { _gammaEnforceTimer?.Dispose(); } catch { }
-            try { _observer.Stop(); } catch { }
-
-            try
+            Action uiCleanup = () =>
             {
-                if (_notifyIcon != null)
+                try { _gammaEnforceTimer?.Stop(); } catch { }
+                try { _gammaEnforceTimer?.Dispose(); } catch { }
+                try { _observer.Stop(); } catch { }
+
+                try
                 {
-                    _notifyIcon.Visible = false;
-                    _notifyIcon.Dispose();
+                    if (_notifyIcon != null)
+                    {
+                        _notifyIcon.Visible = false;
+                        _notifyIcon.Dispose();
+                    }
+                }
+                catch { }
+
+                try { _lvGames?.LargeImageList?.Dispose(); } catch { }
+                try { _resBtnFontRegular?.Dispose(); } catch { }
+                try { _resBtnFontBold?.Dispose(); } catch { }
+            };
+
+            if (this.IsHandleCreated && !this.IsDisposed)
+            {
+                if (this.InvokeRequired)
+                {
+                    try { this.BeginInvoke(uiCleanup); } catch { }
+                }
+                else
+                {
+                    uiCleanup();
                 }
             }
-            catch { }
-
-            try { _lvGames?.LargeImageList?.Dispose(); } catch { }
-            try { _resBtnFontRegular.Dispose(); } catch { }
-            try { _resBtnFontBold.Dispose(); } catch { }
+            else
+            {
+                uiCleanup();
+            }
 
             _currentGameExe = null;
 
