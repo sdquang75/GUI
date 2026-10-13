@@ -311,6 +311,7 @@ namespace GUI.Engine
             Program.Log($"GoodbyeDPI watchdog started for parent PID {parentPid}");
             EventWaitHandle? stopEvt = null;
             Process? parentProc = null;
+            Process? dpiProc = null;
 
             try
             {
@@ -348,10 +349,20 @@ namespace GUI.Engine
                         break;
                     }
 
-                    if (!IsRunning())
+                    if (dpiProc == null || dpiProc.WaitForExit(0))
                     {
-                        Program.Log("GoodbyeDPI is no longer running. Watchdog exiting.");
-                        return;
+                        dpiProc?.Dispose();
+                        dpiProc = null;
+
+                        var procs = Process.GetProcessesByName(ProcessName);
+                        if (procs.Length == 0)
+                        {
+                            Program.Log("GoodbyeDPI is no longer running. Watchdog exiting.");
+                            return;
+                        }
+
+                        dpiProc = procs[0];
+                        for (int i = 1; i < procs.Length; i++) procs[i].Dispose();
                     }
                 }
 
@@ -364,6 +375,7 @@ namespace GUI.Engine
             }
             finally
             {
+                dpiProc?.Dispose();
                 stopEvt?.Dispose();
                 parentProc?.Dispose();
             }
