@@ -357,6 +357,22 @@ namespace GUI.Engine
         {
             try
             {
+                if (_reloadEvent == null)
+                {
+                    try
+                    {
+                        _reloadEvent = EventWaitHandle.OpenExisting(GetReloadEventName(Environment.ProcessId));
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            _reloadEvent = new EventWaitHandle(false, EventResetMode.AutoReset, GetReloadEventName(Environment.ProcessId));
+                        }
+                        catch { }
+                    }
+                }
+
                 if (_reloadEvent != null)
                 {
                     var oldPids = GetRunningProcessIds();
@@ -384,6 +400,22 @@ namespace GUI.Engine
         {
             try
             {
+                if (_stopEvent == null)
+                {
+                    try
+                    {
+                        _stopEvent = EventWaitHandle.OpenExisting(GetStopEventName(Environment.ProcessId));
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            _stopEvent = new EventWaitHandle(false, EventResetMode.ManualReset, GetStopEventName(Environment.ProcessId));
+                        }
+                        catch { }
+                    }
+                }
+
                 if (_stopEvent != null)
                 {
                     _stopEvent.Set();

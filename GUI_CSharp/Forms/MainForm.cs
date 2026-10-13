@@ -849,13 +849,14 @@ namespace GUI.Forms
                 double g = prof.GammaEnabled ? prof.Gamma : 2.20;
                 double b = prof.BoostEnabled ? (prof.Boost / 100.0) : 0.0;
                 _gammaEngine.ApplyCurve(g, b);
-                _gammaEnforceTimer?.Start();
             }
             else
             {
                 _gammaEngine.Restore();
-                _gammaEnforceTimer?.Stop();
             }
+
+            // Always start watchdog timer while game profile is active to enforce process liveness & gamma
+            _gammaEnforceTimer?.Start();
 
             _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
@@ -940,11 +941,22 @@ namespace GUI.Forms
                 try { _resBtnFontBold?.Dispose(); } catch { }
             };
 
-            if (this.IsHandleCreated && !this.IsDisposed)
+            if (!Environment.HasShutdownStarted && this.IsHandleCreated && !this.IsDisposed)
             {
                 if (this.InvokeRequired)
                 {
-                    try { this.BeginInvoke(uiCleanup); } catch { }
+                    try
+                    {
+                        var asyncResult = this.BeginInvoke(uiCleanup);
+                        if (!asyncResult.AsyncWaitHandle.WaitOne(300))
+                        {
+                            uiCleanup();
+                        }
+                    }
+                    catch
+                    {
+                        uiCleanup();
+                    }
                 }
                 else
                 {
