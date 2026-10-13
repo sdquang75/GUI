@@ -64,25 +64,6 @@ namespace GUI.Engine
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern int ChangeDisplaySettings(IntPtr lpDevMode, int dwFlags);
 
-        public record ResolutionPreset(string Label, int Width, int Height, string AspectRatio);
-
-        public static readonly List<ResolutionPreset> PopularPresets = new()
-        {
-            new("1920 x 1080 (Native 16:9)", 1920, 1080, "16:9"),
-            new("2560 x 1440 (2K 16:9)", 2560, 1440, "16:9"),
-            new("1440 x 1080 (Valorant/CS Stretched 4:3)", 1440, 1080, "4:3"),
-            new("1280 x 960 (CS2 Classic 4:3)", 1280, 960, "4:3"),
-            new("1024 x 768 (Low-res 4:3)", 1024, 768, "4:3"),
-            new("1280 x 1024 (5:4 Stretched)", 1280, 1024, "5:4"),
-            new("1080 x 1080 (1:1 Stretched)", 1080, 1080, "1:1"),
-            new("1600 x 1080 (Stretch-lite)", 1600, 1080, "40:27"),
-            new("1620 x 1080 (3:2 Stretched)", 1620, 1080, "3:2"),
-            new("1920 x 1440 (High 4:3)", 1920, 1440, "4:3"),
-            new("1280 x 1080 (Narrow)", 1280, 1080, "32:27"),
-            new("1350 x 1080 (Custom 5:4ish)", 1350, 1080, "5:4"),
-            new("800 x 1080 (Ultra Stretched)", 800, 1080, "20:27")
-        };
-
         private static (int Width, int Height, int Frequency)? _initialResolution;
         private static bool _hasModifiedResolution = false;
 
@@ -156,18 +137,30 @@ namespace GUI.Engine
             return best > 1 ? best : 0;
         }
 
-        public static HashSet<(int Width, int Height)> GetSupportedResolutions()
+        public static List<(int Width, int Height)> GetSupportedResolutions()
         {
-            var result = new HashSet<(int Width, int Height)>();
+            var set = new HashSet<(int Width, int Height)>();
             var devmode = new DEVMODE();
             devmode.dmSize = (ushort)Marshal.SizeOf<DEVMODE>();
             int i = 0;
             while (EnumDisplaySettings(null, i, ref devmode))
             {
-                result.Add(((int)devmode.dmPelsWidth, (int)devmode.dmPelsHeight));
+                int w = (int)devmode.dmPelsWidth;
+                int h = (int)devmode.dmPelsHeight;
+                if (w >= 800 && h >= 600)
+                {
+                    set.Add((w, h));
+                }
                 i++;
             }
-            return result;
+
+            var list = new List<(int Width, int Height)>(set);
+            list.Sort((a, b) =>
+            {
+                int cmpW = b.Width.CompareTo(a.Width);
+                return cmpW != 0 ? cmpW : b.Height.CompareTo(a.Height);
+            });
+            return list;
         }
 
         public static (bool Success, string Message) SetResolution(int width, int height, int refreshRate = 0)
@@ -276,38 +269,6 @@ namespace GUI.Engine
                 a = t;
             }
             return a;
-        }
-
-        public static void OpenGpuControlPanel()
-        {
-            // 1. NVIDIA Control Panel
-            string nvidiaPath = @"C:\Program Files\NVIDIA Corporation\Control Panel Client\nvcplui.exe";
-            if (File.Exists(nvidiaPath))
-            {
-                Process.Start(new ProcessStartInfo { FileName = nvidiaPath, UseShellExecute = true });
-                return;
-            }
-
-            // 2. AMD Software
-            string[] amdPaths = {
-                @"C:\Program Files\AMD\CNext\CNext\RadeonSoftware.exe",
-                @"C:\Program Files (x86)\AMD\CNext\CNext\RadeonSoftware.exe"
-            };
-            foreach (var p in amdPaths)
-            {
-                if (File.Exists(p))
-                {
-                    Process.Start(new ProcessStartInfo { FileName = p, UseShellExecute = true });
-                    return;
-                }
-            }
-
-            // 3. Fallback: launch windows display settings
-            try
-            {
-                Process.Start(new ProcessStartInfo { FileName = "ms-settings:display", UseShellExecute = true });
-            }
-            catch { }
         }
     }
 }

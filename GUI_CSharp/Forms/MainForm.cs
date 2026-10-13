@@ -47,33 +47,13 @@ namespace GUI.Forms
         // --- Right Panel: Quick Resolutions ---
         private Label _lblCurrentRes;
         private Button _btnRefreshRes;
+        private FlowLayoutPanel _pnlResGrid;
         private List<Button> _resButtons = new();
         private readonly Font _resBtnFontRegular = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         private readonly Font _resBtnFontBold = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
-        private TextBox _txtCustomRes;
-        private Button _btnApplyCustom;
-        private Button _btnOpenGpuPanel;
         private Label _lblResStatus;
         private Button _btnOpenUtility;
         private Button _btnOpenMonitors;
-
-        private static readonly (int Width, int Height)[] QuickResolutions = new[]
-        {
-            (1920, 1080),
-            (2560, 1440),
-            (1920, 1440),
-            (1620, 1080),
-            (1568, 1080),
-            (1440, 1080),
-            (1600, 1080),
-            (1280, 1080),
-            (1350, 1080),
-            (1280, 1024),
-            (1080, 1080),
-            (1280, 960),
-            (1024, 768),
-            (800, 1080)
-        };
 
         private bool _startMinimized = false;
 
@@ -112,7 +92,7 @@ namespace GUI.Forms
             {
                 Program.Log("MainForm.Load fired");
                 InitObserver();
-                RefreshCurrentResolution();
+                RefreshCurrentResolution(rebuildButtons: true);
             };
             this.Shown += (s, e) =>
             {
@@ -322,108 +302,32 @@ namespace GUI.Forms
                 BackColor = Color.White,
                 FlatStyle = FlatStyle.System
             };
-            _btnRefreshRes.Click += (s, e) => RefreshCurrentResolution();
+            _btnRefreshRes.Click += (s, e) => RefreshCurrentResolution(rebuildButtons: true);
 
             gbQuickRes.Controls.Add(_lblCurrentRes);
             gbQuickRes.Controls.Add(_btnRefreshRes);
 
-            // Grid of Resolution Buttons (2 columns x 7 rows)
-            var pnlGrid = new TableLayoutPanel
+            // Dynamic Grid of Supported Resolution Buttons
+            _pnlResGrid = new FlowLayoutPanel
             {
                 Location = new Point(8, 48),
-                Size = new Size(328, 276),
-                ColumnCount = 2,
-                RowCount = 7,
+                Size = new Size(328, 344),
+                AutoScroll = true,
+                WrapContents = true,
+                FlowDirection = FlowDirection.LeftToRight,
                 Padding = new Padding(0),
                 Margin = new Padding(0)
             };
-            pnlGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            pnlGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-
-            for (int i = 0; i < 7; i++)
-            {
-                pnlGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100F / 7F));
-            }
-
-            _resButtons.Clear();
-            foreach (var (w, h) in QuickResolutions)
-            {
-                var btn = new Button
-                {
-                    Text = $"{w} x {h}",
-                    Dock = DockStyle.Fill,
-                    Margin = new Padding(2),
-                    BackColor = Color.White,
-                    FlatStyle = FlatStyle.System,
-                    Font = _resBtnFontRegular,
-                    Tag = (w, h)
-                };
-                btn.Click += (s, e) => ApplyResolution(w, h);
-                _resButtons.Add(btn);
-                pnlGrid.Controls.Add(btn);
-            }
-            gbQuickRes.Controls.Add(pnlGrid);
-
-            // Custom Resolution Row
-            var lblCustomPrompt = new Label
-            {
-                Text = "Custom:",
-                Location = new Point(10, 332),
-                AutoSize = true
-            };
-
-            _txtCustomRes = new TextBox
-            {
-                Text = "1440x1080",
-                Location = new Point(62, 329),
-                Size = new Size(110, 24)
-            };
-
-            _btnApplyCustom = new Button
-            {
-                Text = "Apply",
-                Location = new Point(178, 328),
-                Size = new Size(72, 26),
-                BackColor = Color.White,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
-                FlatStyle = FlatStyle.System
-            };
-            _btnApplyCustom.Click += (s, e) =>
-            {
-                var parsed = ParseRes(_txtCustomRes.Text);
-                if (parsed.HasValue)
-                {
-                    ApplyResolution(parsed.Value.Width, parsed.Value.Height);
-                }
-                else
-                {
-                    MessageBox.Show(this, "Please enter a valid resolution, e.g. 1440x1080.", "Invalid Resolution", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-            };
-
-            _btnOpenGpuPanel = new Button
-            {
-                Text = "GPU Panel",
-                Location = new Point(254, 328),
-                Size = new Size(80, 26),
-                BackColor = Color.White,
-                FlatStyle = FlatStyle.System
-            };
-            _btnOpenGpuPanel.Click += (s, e) => DisplayEngine.OpenGpuControlPanel();
+            gbQuickRes.Controls.Add(_pnlResGrid);
 
             _lblResStatus = new Label
             {
                 Text = "Click any resolution button to switch instantly.",
-                Location = new Point(10, 365),
-                Size = new Size(324, 72),
+                Location = new Point(10, 398),
+                Size = new Size(324, 42),
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point),
                 ForeColor = Color.FromArgb(71, 85, 105)
             };
-
-            gbQuickRes.Controls.Add(lblCustomPrompt);
-            gbQuickRes.Controls.Add(_txtCustomRes);
-            gbQuickRes.Controls.Add(_btnApplyCustom);
-            gbQuickRes.Controls.Add(_btnOpenGpuPanel);
             gbQuickRes.Controls.Add(_lblResStatus);
 
             this.Controls.Add(gbQuickRes);
@@ -548,8 +452,49 @@ namespace GUI.Forms
             base.WndProc(ref m);
         }
 
-        private void RefreshCurrentResolution()
+        private void PopulateSupportedResolutions()
         {
+            _pnlResGrid.SuspendLayout();
+            _pnlResGrid.Controls.Clear();
+            foreach (var oldBtn in _resButtons)
+            {
+                try { oldBtn.Dispose(); } catch { }
+            }
+            _resButtons.Clear();
+
+            var supported = DisplayEngine.GetSupportedResolutions();
+            int btnWidth = supported.Count > 16 ? 149 : 158;
+            int btnHeight = supported.Count > 16 ? 36 : 38;
+
+            foreach (var (w, h) in supported)
+            {
+                int resW = w;
+                int resH = h;
+                var btn = new Button
+                {
+                    Text = $"{resW} x {resH}",
+                    Size = new Size(btnWidth, btnHeight),
+                    Margin = new Padding(2),
+                    BackColor = Color.White,
+                    FlatStyle = FlatStyle.System,
+                    Font = _resBtnFontRegular,
+                    Tag = (resW, resH)
+                };
+                btn.Click += (s, e) => ApplyResolution(resW, resH);
+                _resButtons.Add(btn);
+                _pnlResGrid.Controls.Add(btn);
+            }
+
+            _pnlResGrid.ResumeLayout();
+        }
+
+        private void RefreshCurrentResolution(bool rebuildButtons = false)
+        {
+            if (rebuildButtons || _resButtons.Count == 0)
+            {
+                PopulateSupportedResolutions();
+            }
+
             var cur = DisplayEngine.GetCurrentResolution();
             if (cur.HasValue)
             {
@@ -585,18 +530,6 @@ namespace GUI.Forms
             _lblResStatus.Text = msg;
             _lblResStatus.ForeColor = ok ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
             RefreshCurrentResolution();
-        }
-
-        private (int Width, int Height)? ParseRes(string input)
-        {
-            if (string.IsNullOrWhiteSpace(input)) return null;
-            var parts = input.ToLower().Split(new[] { 'x', '*', ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h))
-            {
-                if (w >= 640 && w <= 7680 && h >= 480 && h <= 4320)
-                    return (w, h);
-            }
-            return null;
         }
 
         private void LoadConfigToUi()
