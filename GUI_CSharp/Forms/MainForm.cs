@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -43,6 +44,7 @@ namespace GUI.Forms
         private Button _btnAddManual;
         private Button _btnRemove;
         private ListView _lvGames;
+        private readonly List<Image> _currentTileIcons = new();
         private Label _lblObserverStatus;
         private NotifyIcon _notifyIcon;
         private System.Windows.Forms.Timer? _gammaEnforceTimer;
@@ -79,25 +81,12 @@ namespace GUI.Forms
             {
                 if (!_isCleanedUp && _currentGameExe != null)
                 {
-                    IntPtr fg = GetForegroundWindow();
-                    if (fg == IntPtr.Zero)
-                    {
-                        ResetToDesktop();
-                        return;
-                    }
+                    string procName = Path.GetFileNameWithoutExtension(_currentGameExe);
+                    var procs = Process.GetProcessesByName(procName);
+                    bool isRunning = procs.Length > 0;
+                    foreach (var p in procs) { try { p.Dispose(); } catch { } }
 
-                    uint pid;
-                    GetWindowThreadProcessId(fg, out pid);
-                    string? currentFgExe = null;
-                    if (pid != 0)
-                    {
-                        string path = Utils.ProcessHelper.GetProcessPath((int)pid);
-                        currentFgExe = !string.IsNullOrEmpty(path)
-                            ? Path.GetFileName(path).ToLowerInvariant()
-                            : null;
-                    }
-
-                    if (!string.Equals(currentFgExe, _currentGameExe, StringComparison.OrdinalIgnoreCase))
+                    if (!isRunning)
                     {
                         ResetToDesktop();
                         return;
@@ -576,44 +565,78 @@ namespace GUI.Forms
             RefreshGameTiles();
         }
 
-        private void RefreshGameTiles()
+        private void RefreshGameTiles(string? selectedExe = null)
         {
             _lvGames.BeginUpdate();
-            _lvGames.Items.Clear();
-
-            var oldImageList = _lvGames.LargeImageList;
-            var newImageList = new ImageList
+            try
             {
-                ColorDepth = ColorDepth.Depth32Bit,
-                ImageSize = new Size(48, 48)
-            };
+                _lvGames.Items.Clear();
 
-            var items = new List<ListViewItem>();
-            int index = 0;
-            foreach (var kvp in _config.Games)
-            {
-                string exeKey = kvp.Key.ToLowerInvariant();
-                var prof = kvp.Value;
-
-                using var iconImg = IconHelper.GetGameIcon(exeKey, prof.Path, 48);
-                newImageList.Images.Add(exeKey, iconImg);
-
-                string label = string.IsNullOrEmpty(prof.Name) ? Path.GetFileNameWithoutExtension(exeKey) : prof.Name;
-                var item = new ListViewItem(label)
+                var newImageList = new ImageList
                 {
-                    ImageIndex = index,
-                    ImageKey = exeKey,
-                    Tag = exeKey
+                    ColorDepth = ColorDepth.Depth32Bit,
+                    ImageSize = new Size(48, 48)
                 };
-                items.Add(item);
-                index++;
+
+                var oldIcons = new List<Image>(_currentTileIcons);
+                _currentTileIcons.Clear();
+
+                var items = new List<ListViewItem>();
+                int index = 0;
+                foreach (var kvp in _config.Games)
+                {
+                    string exeKey = kvp.Key.ToLowerInvariant();
+                    var prof = kvp.Value;
+
+                    Image iconImg;
+                    try
+                    {
+                        iconImg = IconHelper.GetGameIcon(exeKey, prof.Path, 48);
+                    }
+                    catch
+                    {
+                        iconImg = IconHelper.CreateBadge(exeKey, 48);
+                    }
+
+                    _currentTileIcons.Add(iconImg);
+                    newImageList.Images.Add(exeKey, iconImg);
+
+                    string label = string.IsNullOrEmpty(prof.Name) ? Path.GetFileNameWithoutExtension(exeKey) : prof.Name;
+                    var item = new ListViewItem(label)
+                    {
+                        ImageIndex = index,
+                        ImageKey = exeKey,
+                        Tag = exeKey
+                    };
+
+                    if (!string.IsNullOrEmpty(selectedExe) && string.Equals(exeKey, selectedExe, StringComparison.OrdinalIgnoreCase))
+                    {
+                        item.Selected = true;
+                        item.Focused = true;
+                    }
+
+                    items.Add(item);
+                    index++;
+                }
+
+                var oldImageList = _lvGames.LargeImageList;
+                _lvGames.LargeImageList = newImageList;
+                _lvGames.Items.AddRange(items.ToArray());
+
+                oldImageList?.Dispose();
+                foreach (var oldImg in oldIcons)
+                {
+                    try { oldImg.Dispose(); } catch { }
+                }
             }
-
-            _lvGames.LargeImageList = newImageList;
-            _lvGames.Items.AddRange(items.ToArray());
-            _lvGames.EndUpdate();
-
-            oldImageList?.Dispose();
+            catch (Exception ex)
+            {
+                Program.Log($"RefreshGameTiles failed: {ex}");
+            }
+            finally
+            {
+                _lvGames.EndUpdate();
+            }
         }
 
         private void OnAddFromRunning()
@@ -657,7 +680,7 @@ namespace GUI.Forms
                 {
                     _config.Games[exe] = configDlg.ResultProfile;
                     ConfigManager.Save(_config);
-                    RefreshGameTiles();
+                    RefreshGameTiles(exe);
 
                     if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
                     {
@@ -714,7 +737,7 @@ namespace GUI.Forms
                 {
                     _config.Games[exe] = configDlg.ResultProfile;
                     ConfigManager.Save(_config);
-                    RefreshGameTiles();
+                    RefreshGameTiles(exe);
 
                     if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
                     {
@@ -736,7 +759,7 @@ namespace GUI.Forms
                     {
                         _config.Games[exe] = configDlg.ResultProfile;
                         ConfigManager.Save(_config);
-                        RefreshGameTiles();
+                        RefreshGameTiles(exe);
 
                         if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
                         {
@@ -904,6 +927,15 @@ namespace GUI.Forms
                 catch { }
 
                 try { _lvGames?.LargeImageList?.Dispose(); } catch { }
+                try
+                {
+                    foreach (var img in _currentTileIcons)
+                    {
+                        try { img.Dispose(); } catch { }
+                    }
+                    _currentTileIcons.Clear();
+                }
+                catch { }
                 try { _resBtnFontRegular?.Dispose(); } catch { }
                 try { _resBtnFontBold?.Dispose(); } catch { }
             };

@@ -47,7 +47,7 @@ namespace GUI.Engine
                 double x = i / 255.0;
                 double yGamma = x > 0 ? Math.Pow(x, baseP) : 0.0;
                 double lift = (x > 0 && blackBoost > 0)
-                    ? Math.Pow(1.0 - x, 2) * Math.Pow(x, 0.6) * 1.5 * blackBoost
+                    ? Math.Pow(1.0 - x, 4) * x * 3.8 * blackBoost
                     : 0.0;
 
                 double y = Math.Clamp(yGamma + lift, 0.0, 1.0);

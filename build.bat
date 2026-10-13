@@ -7,6 +7,7 @@ dotnet publish GUI_CSharp/GUI.csproj -c Release -r win-x64 --self-contained fals
 
 if %ERRORLEVEL% equ 0 (
     move /Y publish_out\GUI.exe GUI.exe >nul
+    if exist "C:\GUI.exe" copy /Y GUI.exe C:\GUI.exe >nul 2>&1
     rmdir /S /Q publish_out >nul 2>&1
     echo.
     echo ========================================

@@ -52,5 +52,25 @@ namespace GUI.Utils
                 return "";
             }
         }
+
+        public static string GetProcessExeName(int pid)
+        {
+            if (pid <= 0) return "";
+            string path = GetProcessPath(pid);
+            if (!string.IsNullOrEmpty(path))
+            {
+                return Path.GetFileName(path).ToLowerInvariant();
+            }
+
+            try
+            {
+                using var proc = Process.GetProcessById(pid);
+                return (proc.ProcessName + ".exe").ToLowerInvariant();
+            }
+            catch
+            {
+                return "";
+            }
+        }
     }
 }

@@ -99,21 +99,10 @@ namespace GUI.Utils
                 GetWindowThreadProcessId(hwnd, out pid);
                 if (pid != 0)
                 {
-                    // Retrieve process exe path safely via QueryFullProcessImageName
-                    string path = ProcessHelper.GetProcessPath((int)pid);
-
-                    if (!string.IsNullOrEmpty(path))
+                    string name = ProcessHelper.GetProcessExeName((int)pid);
+                    if (!string.IsNullOrEmpty(name))
                     {
-                        exeName = Path.GetFileName(path).ToLowerInvariant();
-                    }
-                    else
-                    {
-                        try
-                        {
-                            using var proc = Process.GetProcessById((int)pid);
-                            exeName = (proc.ProcessName + ".exe").ToLowerInvariant();
-                        }
-                        catch { }
+                        exeName = name;
                     }
                 }
             }

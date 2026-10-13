@@ -323,19 +323,13 @@ namespace GUI.Engine
                 {
                     _stopEvent = new EventWaitHandle(false, EventResetMode.ManualReset, GetStopEventName(pid));
                 }
-                else
-                {
-                    _stopEvent.Reset();
-                }
+                _stopEvent.Reset();
 
                 if (_reloadEvent == null)
                 {
                     _reloadEvent = new EventWaitHandle(false, EventResetMode.AutoReset, GetReloadEventName(pid));
                 }
-                else
-                {
-                    _reloadEvent.Reset();
-                }
+                _reloadEvent.Reset();
             }
             catch (Exception ex)
             {
@@ -644,7 +638,7 @@ namespace GUI.Engine
                         if (procs.Length == 0)
                         {
                             Program.Log("GoodbyeDPI is no longer running. Watchdog exiting.");
-                            return;
+                            break;
                         }
 
                         dpiProc = procs[0];
