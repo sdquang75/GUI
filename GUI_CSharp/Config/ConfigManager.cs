@@ -50,8 +50,25 @@ namespace GUI.Config
         [JsonPropertyName("goodbyedpi_mode")]
         public string GoodbyeDpiMode { get; set; } = "git_safe_reverse";
 
+        private Dictionary<string, GameProfile> _games = new(StringComparer.OrdinalIgnoreCase);
+
         [JsonPropertyName("games")]
-        public Dictionary<string, GameProfile> Games { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, GameProfile> Games
+        {
+            get => _games;
+            set
+            {
+                var dict = new Dictionary<string, GameProfile>(StringComparer.OrdinalIgnoreCase);
+                if (value != null)
+                {
+                    foreach (var kvp in value)
+                    {
+                        dict[kvp.Key.ToLowerInvariant()] = kvp.Value;
+                    }
+                }
+                _games = dict;
+            }
+        }
     }
 
     public static class ConfigManager
@@ -85,7 +102,11 @@ namespace GUI.Config
                         PropertyNameCaseInsensitive = true,
                         ReadCommentHandling = JsonCommentHandling.Skip
                     });
-                    if (cfg != null) return cfg;
+                    if (cfg != null)
+                    {
+                        cfg.Games = cfg.Games;
+                        return cfg;
+                    }
                 }
                 catch
                 {

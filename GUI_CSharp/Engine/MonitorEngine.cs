@@ -223,7 +223,11 @@ namespace GUI.Engine
                     using var proc = Process.Start(psi);
                     if (proc == null) return (false, "UAC prompt was cancelled.");
 
-                    proc.WaitForExit(10000);
+                    if (!proc.WaitForExit(30000))
+                    {
+                        return (false, "Operation timed out waiting for elevated helper.");
+                    }
+
                     if (proc.ExitCode == 0)
                     {
                         result = (true, $"Monitor {(enable ? "enabled" : "disabled")} successfully.");
@@ -232,6 +236,10 @@ namespace GUI.Engine
                     {
                         result = (false, $"Operation failed with exit code {proc.ExitCode}.");
                     }
+                }
+                catch (System.ComponentModel.Win32Exception wEx) when (wEx.NativeErrorCode == 1223)
+                {
+                    result = (false, "UAC prompt was cancelled.");
                 }
                 catch (Exception ex)
                 {

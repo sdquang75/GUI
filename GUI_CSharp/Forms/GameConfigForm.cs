@@ -16,6 +16,8 @@ namespace GUI.Forms
 
         private bool _isTesting = false;
         private int _prevVibranceLevel = 50;
+        private bool _prevGammaWasActive = false;
+        private RAMP _prevGammaRamp;
 
         private TrackBar _tbVibrance;
         private Label _lblVibranceVal;
@@ -270,6 +272,10 @@ namespace GUI.Forms
             {
                 _isTesting = true;
                 _prevVibranceLevel = _vibrance?.GetLevel() ?? 50;
+                if (_gammaEngine != null)
+                {
+                    _gammaEngine.SaveCurrentState(out _prevGammaWasActive, out _prevGammaRamp);
+                }
                 _btnTest.Text = "Stop Test";
                 ApplyPreview();
             }
@@ -314,7 +320,7 @@ namespace GUI.Forms
 
             if (_gammaEngine != null)
             {
-                _gammaEngine.Restore();
+                _gammaEngine.RestoreState(_prevGammaWasActive, in _prevGammaRamp);
             }
         }
 

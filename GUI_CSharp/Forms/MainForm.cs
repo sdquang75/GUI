@@ -761,7 +761,7 @@ namespace GUI.Forms
                         }
                     }
 
-                    if (matchedExe != null && matchedExe != _currentGameExe)
+                    if (matchedExe != null && !string.Equals(matchedExe, _currentGameExe, StringComparison.OrdinalIgnoreCase))
                     {
                         ApplyGameProfile(matchedExe, _config.Games[matchedExe]);
                     }

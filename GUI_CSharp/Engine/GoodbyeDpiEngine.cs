@@ -263,7 +263,11 @@ namespace GUI.Engine
                     return (false, "UAC prompt was cancelled.");
                 }
 
-                proc.WaitForExit(10000);
+                if (!proc.WaitForExit(30000))
+                {
+                    return (false, "Operation timed out waiting for elevated helper.");
+                }
+
                 if (proc.ExitCode == 0)
                 {
                     return (true, enable
@@ -271,6 +275,10 @@ namespace GUI.Engine
                         : "GoodbyeDPI stopped successfully.");
                 }
                 return (false, $"Operation failed (exit code {proc.ExitCode}).");
+            }
+            catch (System.ComponentModel.Win32Exception wEx) when (wEx.NativeErrorCode == 1223)
+            {
+                return (false, "UAC prompt was cancelled.");
             }
             catch (Exception ex)
             {
@@ -335,14 +343,42 @@ namespace GUI.Engine
             }
         }
 
+        private static HashSet<int> GetRunningProcessIds()
+        {
+            var pids = new HashSet<int>();
+            try
+            {
+                var procs = Process.GetProcessesByName(ProcessName);
+                foreach (var p in procs)
+                {
+                    try { pids.Add(p.Id); } catch { }
+                    finally { p.Dispose(); }
+                }
+            }
+            catch { }
+            return pids;
+        }
+
         private static bool TrySignalWatchdogReload()
         {
             try
             {
                 if (_reloadEvent != null)
                 {
+                    var oldPids = GetRunningProcessIds();
                     _reloadEvent.Set();
-                    Thread.Sleep(450);
+
+                    var sw = Stopwatch.StartNew();
+                    while (sw.ElapsedMilliseconds < 4000)
+                    {
+                        Thread.Sleep(50);
+                        var currentPids = GetRunningProcessIds();
+                        if (currentPids.Count > 0 && !currentPids.Overlaps(oldPids))
+                        {
+                            Thread.Sleep(250);
+                            return IsRunning();
+                        }
+                    }
                     return IsRunning();
                 }
             }
@@ -554,21 +590,43 @@ namespace GUI.Engine
                         catch { }
                     }
 
-                    if (stopEvt != null && stopEvt.WaitOne(200))
+                    if (stopEvt != null && reloadEvt != null)
                     {
-                        Program.Log("Watchdog received stop signal.");
-                        break;
+                        int signaled = WaitHandle.WaitAny(new WaitHandle[] { stopEvt, reloadEvt }, 200);
+                        if (signaled == 0)
+                        {
+                            Program.Log("Watchdog received stop signal.");
+                            break;
+                        }
+                        if (signaled == 1)
+                        {
+                            var newPreset = GetActivePreset();
+                            Program.Log($"Watchdog received reload signal. Switching to mode '{newPreset.Id}' ({newPreset.Arguments}).");
+                            dpiProc?.Dispose();
+                            dpiProc = null;
+                            KillGoodbyeDpiProcessOnly();
+                            StartGoodbyeDpiProcess(newPreset, out _);
+                            continue;
+                        }
                     }
-
-                    if (reloadEvt != null && reloadEvt.WaitOne(0))
+                    else
                     {
-                        var newPreset = GetActivePreset();
-                        Program.Log($"Watchdog received reload signal. Switching to mode '{newPreset.Id}' ({newPreset.Arguments}).");
-                        dpiProc?.Dispose();
-                        dpiProc = null;
-                        KillGoodbyeDpiProcessOnly();
-                        StartGoodbyeDpiProcess(newPreset, out _);
-                        continue;
+                        if (stopEvt != null && stopEvt.WaitOne(200))
+                        {
+                            Program.Log("Watchdog received stop signal.");
+                            break;
+                        }
+
+                        if (reloadEvt != null && reloadEvt.WaitOne(0))
+                        {
+                            var newPreset = GetActivePreset();
+                            Program.Log($"Watchdog received reload signal. Switching to mode '{newPreset.Id}' ({newPreset.Arguments}).");
+                            dpiProc?.Dispose();
+                            dpiProc = null;
+                            KillGoodbyeDpiProcessOnly();
+                            StartGoodbyeDpiProcess(newPreset, out _);
+                            continue;
+                        }
                     }
 
                     if (parentProc.WaitForExit(stopEvt == null ? 200 : 0))

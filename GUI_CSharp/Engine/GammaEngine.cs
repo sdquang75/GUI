@@ -116,6 +116,36 @@ namespace GUI.Engine
             }
         }
 
+        public void SaveCurrentState(out bool wasActive, out RAMP ramp)
+        {
+            wasActive = IsCustomActive;
+            ramp = _lastAppliedRamp;
+        }
+
+        public void RestoreState(bool wasActive, in RAMP ramp)
+        {
+            if (_isDisposed) return;
+
+            if (wasActive)
+            {
+                _lastAppliedRamp = ramp;
+                IsCustomActive = true;
+                IntPtr hdc = GetDC(IntPtr.Zero);
+                if (hdc != IntPtr.Zero)
+                {
+                    fixed (RAMP* pRamp = &_lastAppliedRamp)
+                    {
+                        SetDeviceGammaRamp(hdc, pRamp);
+                    }
+                    ReleaseDC(IntPtr.Zero, hdc);
+                }
+            }
+            else
+            {
+                ResetToIdentity();
+            }
+        }
+
         public void Restore()
         {
             ResetToIdentity();
