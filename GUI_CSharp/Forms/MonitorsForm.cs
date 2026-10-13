@@ -12,14 +12,11 @@ namespace GUI.Forms
         private Button _btnDisableSelected;
         private Button _btnEnableSelected;
         private Button _btnRefresh;
-        private Button _btnDisableSecondary;
-        private Button _btnEnableAll;
-        private Label _lblNotice;
 
         public MonitorsForm()
         {
             this.Text = "Monitors Management";
-            this.Size = new Size(460, 420);
+            this.Size = new Size(460, 270);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -91,48 +88,7 @@ namespace GUI.Forms
             gbList.Controls.Add(_btnEnableSelected);
             gbList.Controls.Add(_btnRefresh);
 
-            var gbActions = new GroupBox
-            {
-                Text = "Multi-Monitor Stretched Helper",
-                Location = new Point(12, 226),
-                Size = new Size(420, 145)
-            };
-
-            _btnDisableSecondary = new Button
-            {
-                Text = "Disable Secondary Monitors",
-                Location = new Point(10, 22),
-                Size = new Size(195, 30),
-                BackColor = Color.White,
-                FlatStyle = FlatStyle.System
-            };
-            _btnDisableSecondary.Click += (s, e) => OnDisableSecondary();
-
-            _btnEnableAll = new Button
-            {
-                Text = "Enable All Monitors",
-                Location = new Point(215, 22),
-                Size = new Size(195, 30),
-                BackColor = Color.White,
-                FlatStyle = FlatStyle.System
-            };
-            _btnEnableAll.Click += (s, e) => OnEnableAll();
-
-            _lblNotice = new Label
-            {
-                Text = "• Stretched resolutions (Valorant/CS) on multi-monitor setups often snap back or get black bars unless secondary monitors are temporarily disabled.\n• Safety Guard: A 12s auto-revert countdown will trigger when disabling a monitor to prevent display lockouts.",
-                Location = new Point(10, 58),
-                Size = new Size(400, 78),
-                ForeColor = Color.FromArgb(71, 85, 105),
-                Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
-            };
-
-            gbActions.Controls.Add(_btnDisableSecondary);
-            gbActions.Controls.Add(_btnEnableAll);
-            gbActions.Controls.Add(_lblNotice);
-
             this.Controls.Add(gbList);
-            this.Controls.Add(gbActions);
         }
 
         private void RefreshMonitors()
@@ -201,59 +157,6 @@ namespace GUI.Forms
                 }
                 RefreshMonitors();
             }
-        }
-
-        private void OnDisableSecondary()
-        {
-            var monitors = MonitorEngine.EnumerateMonitors();
-            if (monitors.Count <= 1)
-            {
-                MessageBox.Show(this, "Only 1 monitor detected. Nothing to disable.", "Notice", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            var secondaries = monitors.GetRange(1, monitors.Count - 1);
-            var confirm = MessageBox.Show(this, $"This will disable {secondaries.Count} secondary monitor(s).\nAre you sure you want to proceed?", "Confirm Disable", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (confirm != DialogResult.Yes) return;
-
-            var disabledList = new List<MonitorInfo>();
-            foreach (var m in secondaries)
-            {
-                if (m.Enabled)
-                {
-                    var (ok, _) = MonitorEngine.SetMonitorEnabled(m.InstanceId, false);
-                    if (ok) disabledList.Add(m);
-                }
-            }
-
-            RefreshMonitors();
-
-            if (disabledList.Count > 0)
-            {
-                using var guard = new MonitorGuardForm($"{disabledList.Count} Secondary Monitor(s)", () =>
-                {
-                    foreach (var m in disabledList)
-                    {
-                        MonitorEngine.SetMonitorEnabled(m.InstanceId, true);
-                    }
-                    RefreshMonitors();
-                });
-                guard.ShowDialog(this);
-                RefreshMonitors();
-            }
-        }
-
-        private void OnEnableAll()
-        {
-            var monitors = MonitorEngine.EnumerateMonitors();
-            foreach (var m in monitors)
-            {
-                if (!m.Enabled)
-                {
-                    MonitorEngine.SetMonitorEnabled(m.InstanceId, true);
-                }
-            }
-            RefreshMonitors();
         }
     }
 }

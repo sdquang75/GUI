@@ -144,6 +144,60 @@ namespace GUI.Engine
             }
         }
 
+        private static uint StructVersion => (uint)Marshal.SizeOf<NV_DISPLAY_DVC_INFO_EX>() | (1 << 16);
+
+        private static int MapPercentToHardware(int percent, NV_DISPLAY_DVC_INFO_EX info)
+        {
+            percent = Math.Clamp(percent, 0, 100);
+            if (info.maxLevel <= info.minLevel)
+                return percent;
+
+            if (percent == 50)
+                return info.defaultLevel;
+
+            if (percent < 50)
+            {
+                if (info.defaultLevel > info.minLevel)
+                {
+                    int mapped = info.minLevel + (int)Math.Round((percent / 50.0) * (info.defaultLevel - info.minLevel));
+                    return Math.Clamp(mapped, info.minLevel, info.defaultLevel);
+                }
+                return info.defaultLevel;
+            }
+            else
+            {
+                if (info.maxLevel > info.defaultLevel)
+                {
+                    int mapped = info.defaultLevel + (int)Math.Round(((percent - 50) / 50.0) * (info.maxLevel - info.defaultLevel));
+                    return Math.Clamp(mapped, info.defaultLevel, info.maxLevel);
+                }
+                return info.maxLevel;
+            }
+        }
+
+        private static int MapHardwareToPercent(NV_DISPLAY_DVC_INFO_EX info)
+        {
+            if (info.maxLevel <= info.minLevel)
+                return Math.Clamp(info.currentLevel, 0, 100);
+
+            if (info.currentLevel == info.defaultLevel)
+                return 50;
+
+            if (info.currentLevel > info.defaultLevel && info.maxLevel > info.defaultLevel)
+            {
+                int pct = 50 + (int)Math.Round(((double)(info.currentLevel - info.defaultLevel) / (info.maxLevel - info.defaultLevel)) * 50.0);
+                return Math.Clamp(pct, 50, 100);
+            }
+
+            if (info.currentLevel < info.defaultLevel && info.defaultLevel > info.minLevel)
+            {
+                int pct = (int)Math.Round(((double)(info.currentLevel - info.minLevel) / (info.defaultLevel - info.minLevel)) * 50.0);
+                return Math.Clamp(pct, 0, 50);
+            }
+
+            return 50;
+        }
+
         public int GetLevel()
         {
             if (!IsAvailable || _getDvcInfoEx == null || _displayHandles.Count == 0)
@@ -151,12 +205,12 @@ namespace GUI.Engine
 
             var info = new NV_DISPLAY_DVC_INFO_EX
             {
-                version = (uint)Marshal.SizeOf<NV_DISPLAY_DVC_INFO_EX>() | (1 << 16)
+                version = StructVersion
             };
 
             if (_getDvcInfoEx(_displayHandles[0], 0, ref info) == 0)
             {
-                return info.currentLevel;
+                return MapHardwareToPercent(info);
             }
 
             return DesktopLevel;
@@ -170,14 +224,22 @@ namespace GUI.Engine
             level = Math.Clamp(level, 0, 100);
             bool success = true;
 
-            var info = new NV_DISPLAY_DVC_INFO_EX
-            {
-                version = (uint)Marshal.SizeOf<NV_DISPLAY_DVC_INFO_EX>() | (1 << 16),
-                currentLevel = level
-            };
-
             foreach (var h in _displayHandles)
             {
+                var info = new NV_DISPLAY_DVC_INFO_EX
+                {
+                    version = StructVersion
+                };
+
+                if (_getDvcInfoEx != null && _getDvcInfoEx(h, 0, ref info) == 0)
+                {
+                    info.currentLevel = MapPercentToHardware(level, info);
+                }
+                else
+                {
+                    info.currentLevel = level;
+                }
+
                 if (_setDvcLevelEx(h, 0, ref info) != 0)
                 {
                     success = false;
@@ -200,14 +262,22 @@ namespace GUI.Engine
             if (!IsAvailable || _setDvcLevelEx == null || _displayHandles.Count == 0)
                 return;
 
-            var info = new NV_DISPLAY_DVC_INFO_EX
-            {
-                version = (uint)Marshal.SizeOf<NV_DISPLAY_DVC_INFO_EX>() | (1 << 16),
-                currentLevel = DefaultVibranceLevel
-            };
-
             foreach (var h in _displayHandles)
             {
+                var info = new NV_DISPLAY_DVC_INFO_EX
+                {
+                    version = StructVersion
+                };
+
+                if (_getDvcInfoEx != null && _getDvcInfoEx(h, 0, ref info) == 0)
+                {
+                    info.currentLevel = info.defaultLevel;
+                }
+                else
+                {
+                    info.currentLevel = DefaultVibranceLevel;
+                }
+
                 _setDvcLevelEx(h, 0, ref info);
             }
         }

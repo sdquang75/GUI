@@ -91,7 +91,6 @@ namespace GUI.Forms
             _btnRevert.Click += (s, e) =>
             {
                 _timer.Stop();
-                _revertAction?.Invoke();
                 KeptDisabled = false;
                 this.Close();
             };
@@ -108,7 +107,6 @@ namespace GUI.Forms
                 if (_secondsRemaining <= 0)
                 {
                     _timer.Stop();
-                    _revertAction();
                     KeptDisabled = false;
                     this.Close();
                 }
@@ -119,12 +117,15 @@ namespace GUI.Forms
             };
             _timer.Start();
 
+            bool hasReverted = false;
             this.FormClosing += (s, e) =>
             {
                 _timer.Stop();
-                if (!KeptDisabled)
+                _timer.Dispose();
+                if (!KeptDisabled && !hasReverted)
                 {
-                    _revertAction();
+                    hasReverted = true;
+                    _revertAction?.Invoke();
                 }
             };
         }
