@@ -346,7 +346,7 @@ namespace GUI.Forms
             };
             _btnOpenUtility.Click += (s, e) =>
             {
-                using var dlg = new UtilityForm();
+                using var dlg = new UtilityForm(_config);
                 dlg.ShowDialog(this);
             };
             this.Controls.Add(_btnOpenUtility);

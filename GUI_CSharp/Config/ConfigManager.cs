@@ -47,6 +47,9 @@ namespace GUI.Config
         [JsonPropertyName("autostart")]
         public bool Autostart { get; set; } = false;
 
+        [JsonPropertyName("goodbyedpi_mode")]
+        public string GoodbyeDpiMode { get; set; } = "git_safe_reverse";
+
         [JsonPropertyName("games")]
         public Dictionary<string, GameProfile> Games { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
