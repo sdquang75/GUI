@@ -48,6 +48,8 @@ namespace GUI.Forms
         private Label _lblCurrentRes;
         private Button _btnRefreshRes;
         private List<Button> _resButtons = new();
+        private readonly Font _resBtnFontRegular = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        private readonly Font _resBtnFontBold = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
         private TextBox _txtCustomRes;
         private Button _btnApplyCustom;
         private Button _btnOpenGpuPanel;
@@ -353,7 +355,7 @@ namespace GUI.Forms
                     Margin = new Padding(2),
                     BackColor = Color.White,
                     FlatStyle = FlatStyle.System,
-                    Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point),
+                    Font = _resBtnFontRegular,
                     Tag = (w, h)
                 };
                 btn.Click += (s, e) => ApplyResolution(w, h);
@@ -560,12 +562,12 @@ namespace GUI.Forms
                     {
                         if (res.Item1 == cur.Value.Width && res.Item2 == cur.Value.Height)
                         {
-                            btn.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
+                            btn.Font = _resBtnFontBold;
                             btn.Text = $"✓ {res.Item1} x {res.Item2}";
                         }
                         else
                         {
-                            btn.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+                            btn.Font = _resBtnFontRegular;
                             btn.Text = $"{res.Item1} x {res.Item2}";
                         }
                     }
@@ -627,7 +629,7 @@ namespace GUI.Forms
                 string exeKey = kvp.Key.ToLowerInvariant();
                 var prof = kvp.Value;
 
-                var iconImg = IconHelper.GetGameIcon(exeKey, prof.Path, 48);
+                using var iconImg = IconHelper.GetGameIcon(exeKey, prof.Path, 48);
                 newImageList.Images.Add(exeKey, iconImg);
 
                 string label = string.IsNullOrEmpty(prof.Name) ? Path.GetFileNameWithoutExtension(exeKey) : prof.Name;
@@ -654,17 +656,35 @@ namespace GUI.Forms
             if (dlg.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(dlg.SelectedExe))
             {
                 string exe = dlg.SelectedExe.ToLowerInvariant();
-                var initialProfile = new GameProfile
+                GameProfile initialProfile;
+                if (_config.Games.TryGetValue(exe, out var existing))
                 {
-                    Name = Path.GetFileNameWithoutExtension(exe),
-                    Path = dlg.SelectedPath ?? "",
-                    VibranceEnabled = true,
-                    Vibrance = 50,
-                    GammaEnabled = false,
-                    Gamma = 1.80,
-                    BoostEnabled = false,
-                    Boost = 0
-                };
+                    initialProfile = new GameProfile
+                    {
+                        Name = existing.Name,
+                        Path = !string.IsNullOrEmpty(dlg.SelectedPath) ? dlg.SelectedPath : existing.Path,
+                        VibranceEnabled = existing.VibranceEnabled,
+                        Vibrance = existing.Vibrance,
+                        GammaEnabled = existing.GammaEnabled,
+                        Gamma = existing.Gamma,
+                        BoostEnabled = existing.BoostEnabled,
+                        Boost = existing.Boost
+                    };
+                }
+                else
+                {
+                    initialProfile = new GameProfile
+                    {
+                        Name = Path.GetFileNameWithoutExtension(exe),
+                        Path = dlg.SelectedPath ?? "",
+                        VibranceEnabled = true,
+                        Vibrance = 50,
+                        GammaEnabled = false,
+                        Gamma = 1.80,
+                        BoostEnabled = false,
+                        Boost = 0
+                    };
+                }
 
                 using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
@@ -672,6 +692,11 @@ namespace GUI.Forms
                     _config.Games[exe] = configDlg.ResultProfile;
                     ConfigManager.Save(_config);
                     RefreshGameTiles();
+
+                    if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ApplyGameProfile(exe, _config.Games[exe]);
+                    }
                 }
             }
         }
@@ -688,17 +713,35 @@ namespace GUI.Forms
             if (ofd.ShowDialog(this) == DialogResult.OK)
             {
                 string exe = Path.GetFileName(ofd.FileName).ToLowerInvariant();
-                var initialProfile = new GameProfile
+                GameProfile initialProfile;
+                if (_config.Games.TryGetValue(exe, out var existing))
                 {
-                    Name = Path.GetFileNameWithoutExtension(exe),
-                    Path = ofd.FileName,
-                    VibranceEnabled = true,
-                    Vibrance = 50,
-                    GammaEnabled = false,
-                    Gamma = 1.80,
-                    BoostEnabled = false,
-                    Boost = 0
-                };
+                    initialProfile = new GameProfile
+                    {
+                        Name = existing.Name,
+                        Path = ofd.FileName,
+                        VibranceEnabled = existing.VibranceEnabled,
+                        Vibrance = existing.Vibrance,
+                        GammaEnabled = existing.GammaEnabled,
+                        Gamma = existing.Gamma,
+                        BoostEnabled = existing.BoostEnabled,
+                        Boost = existing.Boost
+                    };
+                }
+                else
+                {
+                    initialProfile = new GameProfile
+                    {
+                        Name = Path.GetFileNameWithoutExtension(exe),
+                        Path = ofd.FileName,
+                        VibranceEnabled = true,
+                        Vibrance = 50,
+                        GammaEnabled = false,
+                        Gamma = 1.80,
+                        BoostEnabled = false,
+                        Boost = 0
+                    };
+                }
 
                 using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
@@ -706,6 +749,11 @@ namespace GUI.Forms
                     _config.Games[exe] = configDlg.ResultProfile;
                     ConfigManager.Save(_config);
                     RefreshGameTiles();
+
+                    if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ApplyGameProfile(exe, _config.Games[exe]);
+                    }
                 }
             }
         }
@@ -723,6 +771,11 @@ namespace GUI.Forms
                         _config.Games[exe] = configDlg.ResultProfile;
                         ConfigManager.Save(_config);
                         RefreshGameTiles();
+
+                        if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
+                        {
+                            ApplyGameProfile(exe, _config.Games[exe]);
+                        }
                     }
                 }
             }
@@ -738,6 +791,11 @@ namespace GUI.Forms
                     _config.Games.Remove(exe);
                     ConfigManager.Save(_config);
                     RefreshGameTiles();
+
+                    if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ResetToDesktop();
+                    }
                 }
             }
         }
@@ -876,6 +934,10 @@ namespace GUI.Forms
                 }
             }
             catch { }
+
+            try { _lvGames?.LargeImageList?.Dispose(); } catch { }
+            try { _resBtnFontRegular.Dispose(); } catch { }
+            try { _resBtnFontBold.Dispose(); } catch { }
 
             _currentGameExe = null;
 

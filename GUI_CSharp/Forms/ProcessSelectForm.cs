@@ -85,28 +85,42 @@ namespace GUI.Forms
             string[] ignored = { "explorer.exe", "svchost.exe", "gui.exe", "conhost.exe", "taskhostw.exe", "cmd.exe", "powershell.exe", "idle.exe", "system" };
 
             var procs = Process.GetProcesses();
-            Array.Sort(procs, (a, b) => string.Compare(a.ProcessName, b.ProcessName, StringComparison.OrdinalIgnoreCase));
-
-            foreach (var p in procs)
+            try
             {
-                try
+                Array.Sort(procs, (a, b) =>
                 {
-                    string name = (p.ProcessName + ".exe").ToLowerInvariant();
-                    if (Array.IndexOf(ignored, name) >= 0) continue;
+                    try { return string.Compare(a.ProcessName, b.ProcessName, StringComparison.OrdinalIgnoreCase); }
+                    catch { return 0; }
+                });
 
-                    string path = Utils.ProcessHelper.GetProcessPath(p.Id);
-                    if (!seen.Contains(name))
+                foreach (var p in procs)
+                {
+                    try
                     {
-                        seen.Add(name);
-                        _procMap[name] = path;
-                        _listBox.Items.Add(name);
+                        string name = (p.ProcessName + ".exe").ToLowerInvariant();
+                        if (Array.IndexOf(ignored, name) >= 0) continue;
+
+                        string path = Utils.ProcessHelper.GetProcessPath(p.Id);
+                        if (!seen.Contains(name))
+                        {
+                            seen.Add(name);
+                            _procMap[name] = path;
+                            _listBox.Items.Add(name);
+                        }
+                        else if (!string.IsNullOrEmpty(path) && (!_procMap.TryGetValue(name, out var existing) || string.IsNullOrEmpty(existing)))
+                        {
+                            _procMap[name] = path;
+                        }
                     }
-                    else if (!string.IsNullOrEmpty(path) && (!_procMap.TryGetValue(name, out var existing) || string.IsNullOrEmpty(existing)))
-                    {
-                        _procMap[name] = path;
-                    }
+                    catch { }
                 }
-                catch { }
+            }
+            finally
+            {
+                foreach (var p in procs)
+                {
+                    try { p.Dispose(); } catch { }
+                }
             }
         }
 

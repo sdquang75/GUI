@@ -47,21 +47,6 @@ namespace GUI.Config
         [JsonPropertyName("autostart")]
         public bool Autostart { get; set; } = false;
 
-        [JsonPropertyName("never_change_res")]
-        public bool NeverChangeRes { get; set; } = true;
-
-        [JsonPropertyName("quickres_native")]
-        public string QuickResNativeRes { get; set; } = "1920x1080";
-
-        [JsonPropertyName("quickres_stretched")]
-        public string QuickResStretchedRes { get; set; } = "1440x1080";
-
-        [JsonPropertyName("quickres_hotkey")]
-        public string QuickResHotkey { get; set; } = "F11";
-
-        [JsonPropertyName("quickres_hotkey_enabled")]
-        public bool QuickResHotkeyEnabled { get; set; } = false;
-
         [JsonPropertyName("games")]
         public Dictionary<string, GameProfile> Games { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
@@ -108,7 +93,6 @@ namespace GUI.Config
             var defaultCfg = new AppConfig();
             defaultCfg.Desktop.Vibrance = 50;
             defaultCfg.Autostart = false;
-            defaultCfg.NeverChangeRes = true;
             return defaultCfg;
         }
 

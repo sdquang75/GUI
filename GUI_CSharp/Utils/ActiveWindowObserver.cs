@@ -44,7 +44,6 @@ namespace GUI.Utils
 
         private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
         private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
-        private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
 
         private IntPtr _hookHandle = IntPtr.Zero;
         private WinEventDelegate? _hookDelegate;
@@ -68,7 +67,7 @@ namespace GUI.Utils
                 _hookDelegate,
                 0,
                 0,
-                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+                WINEVENT_OUTOFCONTEXT
             );
 
             // Immediate initial check for currently active window at launch

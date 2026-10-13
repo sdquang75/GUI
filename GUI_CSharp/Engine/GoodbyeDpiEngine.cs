@@ -245,7 +245,7 @@ namespace GUI.Engine
                         WindowStyle = ProcessWindowStyle.Hidden
                     };
 
-                    var proc = Process.Start(psi);
+                    using var proc = Process.Start(psi);
                     if (proc == null)
                     {
                         return (false, "Failed to launch goodbyedpi.exe.");

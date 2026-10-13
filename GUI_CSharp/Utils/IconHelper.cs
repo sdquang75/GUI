@@ -53,18 +53,7 @@ namespace GUI.Utils
         {
             string cachePath = Path.Combine(IconsDirectory, $"{exeName.ToLowerInvariant()}.png");
 
-            // 1. Try extract directly from specified exe path first so valid paths always show real icon & heal bad cache
-            if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
-            {
-                var extracted = ExtractFromExe(exePath, size);
-                if (extracted != null)
-                {
-                    try { extracted.Save(cachePath, System.Drawing.Imaging.ImageFormat.Png); } catch { }
-                    return extracted;
-                }
-            }
-
-            // 2. Check disk cache (validate alpha channel to reject/heal corrupted 0-alpha PNGs)
+            // 1. Check disk cache first (validate alpha channel to reject/heal corrupted 0-alpha PNGs)
             if (File.Exists(cachePath))
             {
                 try
@@ -87,13 +76,25 @@ namespace GUI.Utils
                 catch { }
             }
 
-            // 3. Search running processes if path not provided or failed
-            string simpleName = Path.GetFileNameWithoutExtension(exeName).ToLowerInvariant();
-            foreach (var proc in Process.GetProcesses())
+            // 2. Try extract directly from specified exe path
+            if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
             {
-                try
+                var extracted = ExtractFromExe(exePath, size);
+                if (extracted != null)
                 {
-                    if (proc.ProcessName.ToLowerInvariant() == simpleName)
+                    try { extracted.Save(cachePath, System.Drawing.Imaging.ImageFormat.Png); } catch { }
+                    return extracted;
+                }
+            }
+
+            // 3. Search running processes by name if path not provided or failed
+            string simpleName = Path.GetFileNameWithoutExtension(exeName);
+            var procs = Process.GetProcessesByName(simpleName);
+            try
+            {
+                foreach (var proc in procs)
+                {
+                    try
                     {
                         string procPath = ProcessHelper.GetProcessPath(proc.Id);
                         if (!string.IsNullOrEmpty(procPath) && File.Exists(procPath))
@@ -106,8 +107,15 @@ namespace GUI.Utils
                             }
                         }
                     }
+                    catch { }
                 }
-                catch { }
+            }
+            finally
+            {
+                foreach (var proc in procs)
+                {
+                    try { proc.Dispose(); } catch { }
+                }
             }
 
             // 4. Fallback badge
@@ -317,7 +325,7 @@ namespace GUI.Utils
                 }
 
                 // 3. Try extract from exe
-                string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                string exePath = Environment.ProcessPath ?? "";
                 if (File.Exists(exePath))
                 {
                     var ico = Icon.ExtractAssociatedIcon(exePath);
@@ -351,7 +359,7 @@ namespace GUI.Utils
 
             using var font = new Font("Segoe UI", 10, FontStyle.Bold, GraphicsUnit.Point);
             using var textBrush = new SolidBrush(Color.White);
-            var format = new StringFormat
+            using var format = new StringFormat
             {
                 Alignment = StringAlignment.Center,
                 LineAlignment = StringAlignment.Center
