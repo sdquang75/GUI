@@ -4,8 +4,8 @@ namespace GUI.Engine
 {
     public class UnifiedVibranceEngine : IVibranceEngine
     {
-        private readonly NvApiEngine _nvApi;
-        private readonly WindowsDwmEngine _dwm;
+        private readonly NvApiEngine? _nvApi;
+        private readonly WindowsDwmEngine? _dwm;
         private readonly IVibranceEngine _activeEngine;
 
         public bool IsAvailable => _activeEngine.IsAvailable;
@@ -15,8 +15,8 @@ namespace GUI.Engine
             get => _activeEngine.DesktopLevel;
             set
             {
-                _nvApi.DesktopLevel = value;
-                _dwm.DesktopLevel = value;
+                if (_nvApi != null) _nvApi.DesktopLevel = value;
+                if (_dwm != null) _dwm.DesktopLevel = value;
             }
         }
 
@@ -26,22 +26,25 @@ namespace GUI.Engine
         public UnifiedVibranceEngine()
         {
             _nvApi = new NvApiEngine();
-            _dwm = new WindowsDwmEngine();
 
             if (_nvApi.IsAvailable && _nvApi.DisplayCount > 0)
             {
                 _activeEngine = _nvApi;
                 Program.Log($"UnifiedVibranceEngine: Active engine -> NVIDIA DVC ({_nvApi.DisplayCount} displays)");
             }
-            else if (_dwm.IsAvailable)
-            {
-                _activeEngine = _dwm;
-                Program.Log("UnifiedVibranceEngine: Active engine -> Windows DWM (Intel / AMD / Generic)");
-            }
             else
             {
-                _activeEngine = _nvApi;
-                Program.Log("UnifiedVibranceEngine: Fallback to NvApi (No engine available)");
+                _dwm = new WindowsDwmEngine();
+                if (_dwm.IsAvailable)
+                {
+                    _activeEngine = _dwm;
+                    Program.Log("UnifiedVibranceEngine: Active engine -> Windows DWM (Intel / AMD / Generic)");
+                }
+                else
+                {
+                    _activeEngine = _nvApi;
+                    Program.Log("UnifiedVibranceEngine: Fallback to NvApi (No engine available)");
+                }
             }
         }
 
@@ -65,8 +68,8 @@ namespace GUI.Engine
             try
             {
                 _activeEngine.ResetToDefault();
-                _nvApi.Dispose();
-                _dwm.Dispose();
+                _nvApi?.Dispose();
+                _dwm?.Dispose();
             }
             catch { }
         }
