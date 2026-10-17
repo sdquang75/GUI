@@ -197,17 +197,21 @@ namespace GUI.Engine
             var primaryMonitorIds = new List<string>();
             try
             {
-                var adapterDev = new DISPLAY_DEVICEW();
-                adapterDev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
-                for (uint i = 0; EnumDisplayDevicesW(null, i, ref adapterDev, 0); i++)
+                for (uint i = 0; ; i++)
                 {
+                    var adapterDev = new DISPLAY_DEVICEW();
+                    adapterDev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
+                    if (!EnumDisplayDevicesW(null, i, ref adapterDev, 0)) break;
+
                     bool isPrimary = (adapterDev.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
                     if (isPrimary)
                     {
-                        var monDev = new DISPLAY_DEVICEW();
-                        monDev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
-                        for (uint j = 0; EnumDisplayDevicesW(adapterDev.DeviceName, j, ref monDev, 0); j++)
+                        for (uint j = 0; ; j++)
                         {
+                            var monDev = new DISPLAY_DEVICEW();
+                            monDev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
+                            if (!EnumDisplayDevicesW(adapterDev.DeviceName, j, ref monDev, 0)) break;
+
                             if (!string.IsNullOrEmpty(monDev.DeviceID))
                             {
                                 primaryMonitorIds.Add(monDev.DeviceID);
@@ -252,18 +256,53 @@ namespace GUI.Engine
             return list;
         }
 
+        private static bool _cachedHasDisabled = false;
+        private static long _lastDisabledCheckTick = 0;
+        private static readonly object _monitorCheckLock = new object();
+
+        public static void InvalidateMonitorCache()
+        {
+            lock (_monitorCheckLock)
+            {
+                _lastDisabledCheckTick = 0;
+            }
+        }
+
         public static bool HasAnyDisabledMonitors()
         {
-            try
+            lock (_monitorCheckLock)
             {
-                var list = EnumerateMonitors();
-                foreach (var m in list)
+                if (_disabledInSession.Count > 0)
                 {
-                    if (!m.Enabled) return true;
+                    return true;
+                }
+
+                long now = Environment.TickCount64;
+                if (now - _lastDisabledCheckTick < 4000)
+                {
+                    return _cachedHasDisabled;
+                }
+                _lastDisabledCheckTick = now;
+                try
+                {
+                    var list = EnumerateMonitors();
+                    bool hasDisabled = false;
+                    foreach (var m in list)
+                    {
+                        if (!m.Enabled)
+                        {
+                            hasDisabled = true;
+                            break;
+                        }
+                    }
+                    _cachedHasDisabled = hasDisabled;
+                    return _cachedHasDisabled;
+                }
+                catch
+                {
+                    return false;
                 }
             }
-            catch { }
-            return false;
         }
 
         public static bool IsPrimaryMonitorDisabled()
@@ -358,13 +397,17 @@ namespace GUI.Engine
 
             if (result.Success)
             {
-                if (!enable)
+                lock (_monitorCheckLock)
                 {
-                    _disabledInSession.Add(instanceId);
-                }
-                else
-                {
-                    _disabledInSession.Remove(instanceId);
+                    InvalidateMonitorCache();
+                    if (!enable)
+                    {
+                        _disabledInSession.Add(instanceId);
+                    }
+                    else
+                    {
+                        _disabledInSession.Remove(instanceId);
+                    }
                 }
             }
 
@@ -375,21 +418,27 @@ namespace GUI.Engine
         {
             try
             {
-                if (_disabledInSession.Count == 0) return;
-
-                // If not running as admin, do NOT trigger a UAC prompt during app exit or OS shutdown
-                if (!IsAdministrator())
+                List<string> toEnable;
+                lock (_monitorCheckLock)
                 {
-                    Program.Log("MonitorEngine.RestoreOnExit: Skipping restore because process is not elevated (avoid UAC prompt on exit).");
-                    return;
+                    if (_disabledInSession.Count == 0) return;
+
+                    // If not running as admin, do NOT trigger a UAC prompt during app exit or OS shutdown
+                    if (!IsAdministrator())
+                    {
+                        Program.Log("MonitorEngine.RestoreOnExit: Skipping restore because process is not elevated (avoid UAC prompt on exit).");
+                        return;
+                    }
+
+                    toEnable = new List<string>(_disabledInSession);
+                    _disabledInSession.Clear();
+                    InvalidateMonitorCache();
                 }
 
-                var toEnable = new List<string>(_disabledInSession);
                 foreach (var id in toEnable)
                 {
-                    SetMonitorEnabled(id, true);
+                    SetDevNodeEnabledDirect(id, true);
                 }
-                _disabledInSession.Clear();
             }
             catch (Exception ex)
             {

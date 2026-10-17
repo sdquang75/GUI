@@ -34,6 +34,7 @@ namespace GUI.Forms
         private UnifiedVibranceEngine _vibrance;
         private GammaEngine _gammaEngine;
         private ActiveWindowObserver _observer;
+        private Cs2GsiListener _gsiListener;
         private EventWaitHandle? _showWindowEvent;
         private RegisteredWaitHandle? _showWindowWaitHandle;
 
@@ -73,6 +74,9 @@ namespace GUI.Forms
             _vibrance = new UnifiedVibranceEngine();
             _gammaEngine = new GammaEngine();
             _observer = new ActiveWindowObserver();
+            _gsiListener = new Cs2GsiListener(_config.Cs2GsiPort);
+            _gsiListener.StateUpdated += OnCs2GsiStateUpdated;
+            _gsiListener.Start();
 
             DisplayEngine.CaptureInitialResolution();
             _gammaEngine.ResetToIdentity();
@@ -139,7 +143,7 @@ namespace GUI.Forms
 
         private void InitializeComponent()
         {
-            this.Text = "GUI 1.0.5 - Vibrance & QuickRes";
+            this.Text = "GUI 1.1.0 - Vibrance & QuickRes";
             this.ClientSize = new Size(722, 500);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -394,7 +398,7 @@ namespace GUI.Forms
             // System Tray
             // ==========================================
             var trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Open GUI 1.0.5", null, (s, e) => RestoreFromTray());
+            trayMenu.Items.Add("Open GUI 1.1.0", null, (s, e) => RestoreFromTray());
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Exit", null, (s, e) =>
             {
@@ -404,7 +408,7 @@ namespace GUI.Forms
 
             _notifyIcon = new NotifyIcon
             {
-                Text = "GUI 1.0.5",
+                Text = "GUI 1.1.0",
                 Icon = this.Icon,
                 ContextMenuStrip = trayMenu,
                 Visible = true
@@ -676,7 +680,7 @@ namespace GUI.Forms
                     };
                 }
 
-                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine);
+                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine, _gsiListener);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
                 {
                     _config.Games[exe] = configDlg.ResultProfile;
@@ -733,7 +737,7 @@ namespace GUI.Forms
                     };
                 }
 
-                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine);
+                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine, _gsiListener);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
                 {
                     _config.Games[exe] = configDlg.ResultProfile;
@@ -755,7 +759,7 @@ namespace GUI.Forms
                 string? exe = _lvGames.SelectedItems[0].Tag as string;
                 if (!string.IsNullOrEmpty(exe) && _config.Games.TryGetValue(exe, out var prof))
                 {
-                    using var configDlg = new GameConfigForm(exe, prof, _vibrance, _gammaEngine);
+                    using var configDlg = new GameConfigForm(exe, prof, _vibrance, _gammaEngine, _gsiListener);
                     if (configDlg.ShowDialog(this) == DialogResult.OK)
                     {
                         _config.Games[exe] = configDlg.ResultProfile;
@@ -863,8 +867,99 @@ namespace GUI.Forms
             ScheduleReapply(exe, prof, 150);
             ScheduleReapply(exe, prof, 350);
 
-            _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
+            if (string.Equals(exe, "cs2.exe", StringComparison.OrdinalIgnoreCase) && _gsiListener.IsCs2Connected)
+            {
+                _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}] • CS2 GSI Active";
+            }
+            else
+            {
+                _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
+            }
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
+        }
+
+        private double _lastLoggedFlashedFraction = -1.0;
+
+        private void OnCs2GsiStateUpdated(double flashed, double smoked, bool isPlayerActive, string? rawFlashed)
+        {
+            if (this.IsDisposed || _isCleanedUp) return;
+
+            // Check if CS2 is active: either tracked as current game, or foreground window belongs to cs2.exe
+            bool isCs2Active = string.Equals(_currentGameExe, "cs2.exe", StringComparison.OrdinalIgnoreCase);
+            if (!isCs2Active)
+            {
+                try
+                {
+                    IntPtr fg = GetForegroundWindow();
+                    if (fg != IntPtr.Zero)
+                    {
+                        GetWindowThreadProcessId(fg, out uint pid);
+                        if (pid != 0)
+                        {
+                            string fgExe = ProcessHelper.GetProcessExeName((int)pid);
+                            if (string.Equals(fgExe, "cs2.exe", StringComparison.OrdinalIgnoreCase))
+                            {
+                                isCs2Active = true;
+                                _currentGameExe = "cs2.exe";
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // Only apply anti-flash if CS2 is focused
+            if (!isCs2Active)
+            {
+                // CRITICAL FAILSAFE: If screen was dimmed while in CS2, but user Alt-Tabbed out or CS2 closed/crashed,
+                // restore contrast immediately so desktop / other apps are never stuck dimmed!
+                if (_gammaEngine.CurrentContrast < 0.999)
+                {
+                    _gammaEngine.ApplyContrast(1.0);
+                }
+                return;
+            }
+
+            if (!_config.Games.TryGetValue("cs2.exe", out var cs2Prof))
+            {
+                cs2Prof = new GameProfile { Cs2AntiFlashEnabled = true, Cs2AntiFlashMaxDim = 100 };
+            }
+
+            if (!cs2Prof.Cs2AntiFlashEnabled)
+            {
+                if (_gammaEngine.CurrentContrast < 0.999)
+                {
+                    _gammaEngine.ApplyContrast(1.0);
+                }
+                return;
+            }
+
+            double f = isPlayerActive ? flashed : 0.0;
+            double contrast = (1.0 - f) / (1.0 + f);
+
+            // Apply Max Dimming ratio
+            double maxDim = Math.Clamp(cs2Prof.Cs2AntiFlashMaxDim, 20, 100) / 100.0;
+            double effectiveContrast = 1.0 - (1.0 - contrast) * maxDim;
+
+            // 1. CRITICAL PATH: Apply contrast immediately to GPU hardware (0.00ms delay!)
+            _gammaEngine.ApplyContrast(effectiveContrast);
+
+            // 2. NON-CRITICAL PATH: Log state changes asynchronously (never block hardware thread!)
+            if (Math.Abs(f - _lastLoggedFlashedFraction) > 0.02)
+            {
+                _lastLoggedFlashedFraction = f;
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    if (f > 0.02)
+                    {
+                        Program.Log($"[CS2 Flash] Flashed={f * 100:0.0}% (raw='{rawFlashed}') -> Dimming screen (contrast={effectiveContrast:0.00})");
+                    }
+                    else
+                    {
+                        Program.Log($"[CS2 Flash] Flash ended (raw='{rawFlashed}') -> Screen restored.");
+                    }
+                });
+            }
         }
 
         private void ScheduleReapply(string exe, GameProfile prof, int delayMs)
@@ -1019,6 +1114,9 @@ namespace GUI.Forms
 
             // 5. Stop GoodbyeDPI if running
             try { GoodbyeDpiEngine.StopOnExit(); } catch { }
+
+            // 6. Stop CS2 GSI Listener
+            try { _gsiListener.Dispose(); } catch { }
         }
 
         private void OnFormClosing(object? sender, FormClosingEventArgs e)

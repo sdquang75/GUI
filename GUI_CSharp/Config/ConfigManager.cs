@@ -37,6 +37,15 @@ namespace GUI.Config
 
         [JsonPropertyName("boost")]
         public int Boost { get; set; } = 0;
+
+        [JsonPropertyName("cs2_antiflash_enabled")]
+        public bool Cs2AntiFlashEnabled { get; set; } = true;
+
+        [JsonPropertyName("cs2_antismoke_enabled")]
+        public bool Cs2AntiSmokeEnabled { get; set; } = false;
+
+        [JsonPropertyName("cs2_antiflash_max_dim")]
+        public int Cs2AntiFlashMaxDim { get; set; } = 100;
     }
 
     public class AppConfig
@@ -49,6 +58,9 @@ namespace GUI.Config
 
         [JsonPropertyName("goodbyedpi_mode")]
         public string GoodbyeDpiMode { get; set; } = "git_safe_reverse";
+
+        [JsonPropertyName("cs2_gsi_port")]
+        public int Cs2GsiPort { get; set; } = 23456;
 
         private Dictionary<string, GameProfile> _games = new(StringComparer.OrdinalIgnoreCase);
 

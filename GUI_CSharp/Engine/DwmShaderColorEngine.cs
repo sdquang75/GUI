@@ -30,6 +30,7 @@ namespace GUI.Engine
         public static int CurrentVibrance { get; private set; } = 50;
         public static double CurrentGamma { get; private set; } = 2.20;
         public static double CurrentBlackBoost { get; private set; } = 0.0;
+        public static double CurrentContrast { get; private set; } = 1.0;
         public static bool IsGammaBoostActive { get; private set; } = false;
         public static bool IsVibranceActive { get; private set; } = false;
 
@@ -54,13 +55,14 @@ namespace GUI.Engine
             }
         }
 
-        public static bool SetGammaAndBoost(double gamma, double blackBoost)
+        public static bool SetGammaAndBoost(double gamma, double blackBoost, double contrast = 1.0)
         {
             lock (_lock)
             {
                 CurrentGamma = Math.Clamp(gamma, 1.20, 3.00);
                 CurrentBlackBoost = Math.Clamp(blackBoost, 0.0, 1.0);
-                IsGammaBoostActive = (Math.Abs(CurrentGamma - 2.20) > 0.01) || (CurrentBlackBoost > 0.001);
+                CurrentContrast = Math.Clamp(contrast, 0.0, 1.0);
+                IsGammaBoostActive = (Math.Abs(CurrentGamma - 2.20) > 0.01) || (CurrentBlackBoost > 0.001) || (Math.Abs(CurrentContrast - 1.0) > 0.001);
                 return UpdateEffectInternal();
             }
         }
@@ -71,6 +73,7 @@ namespace GUI.Engine
             {
                 CurrentGamma = 2.20;
                 CurrentBlackBoost = 0.0;
+                CurrentContrast = 1.0;
                 IsGammaBoostActive = false;
                 return UpdateEffectInternal();
             }
@@ -103,6 +106,7 @@ namespace GUI.Engine
                 CurrentVibrance = 50;
                 CurrentGamma = 2.20;
                 CurrentBlackBoost = 0.0;
+                CurrentContrast = 1.0;
                 IsGammaBoostActive = false;
                 IsVibranceActive = false;
                 UpdateEffectInternal();
@@ -152,6 +156,10 @@ namespace GUI.Engine
                         totalOffset = Math.Clamp(0.31f * maxGain + 0.30f * boost, 0f, 0.45f);
                         totalScale = Math.Clamp(1.0f - 0.20f * maxGain - 0.35f * boost, 0.2f, 1.2f);
                     }
+
+                    // Modulate scale & offset by CurrentContrast (0.0 to 1.0)
+                    totalScale *= (float)CurrentContrast;
+                    totalOffset *= (float)CurrentContrast;
                 }
 
                 // 2. Calculate Vibrance saturation factor (ITU-R BT.709)

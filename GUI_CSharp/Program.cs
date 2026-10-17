@@ -130,6 +130,11 @@ namespace GUI
                     Console.WriteLine($"  - {m.FriendlyName} [{(m.Enabled ? "Enabled" : "Disabled")}] (ID: {m.InstanceId})");
                 }
 
+                using var gsi = new Engine.Cs2GsiListener(23456);
+                gsi.Start();
+                Console.WriteLine($"CS2 GSI Listener Test: Listening={gsi.IsListening} on port {gsi.Port}");
+                gsi.Stop();
+
                 Log("=== Test Complete ===");
                 return;
             }

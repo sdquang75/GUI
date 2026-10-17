@@ -3,6 +3,7 @@
     "vibrance": 50
   },
   "autostart": false,
+  "cs2_gsi_port": 23456,
   "games": {
     "cs2.exe": {
       "name": "cs2",
@@ -12,7 +13,10 @@
       "gamma_enabled": true,
       "gamma": 1.4,
       "boost_enabled": true,
-      "boost": 30
+      "boost": 30,
+      "cs2_antiflash_enabled": true,
+      "cs2_antismoke_enabled": false,
+      "cs2_antiflash_max_dim": 100
     },
     "wininit.exe": {
       "name": "wininit",
