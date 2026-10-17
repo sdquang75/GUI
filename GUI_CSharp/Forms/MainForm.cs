@@ -143,7 +143,7 @@ namespace GUI.Forms
 
         private void InitializeComponent()
         {
-            this.Text = "GUI 1.1.0 - Vibrance & QuickRes";
+            this.Text = "GUI 1.1.1 - Vibrance & QuickRes";
             this.ClientSize = new Size(722, 500);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -398,7 +398,7 @@ namespace GUI.Forms
             // System Tray
             // ==========================================
             var trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Open GUI 1.1.0", null, (s, e) => RestoreFromTray());
+            trayMenu.Items.Add("Open GUI 1.1.1", null, (s, e) => RestoreFromTray());
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Exit", null, (s, e) =>
             {
@@ -408,7 +408,7 @@ namespace GUI.Forms
 
             _notifyIcon = new NotifyIcon
             {
-                Text = "GUI 1.1.0",
+                Text = "GUI 1.1.1",
                 Icon = this.Icon,
                 ContextMenuStrip = trayMenu,
                 Visible = true
