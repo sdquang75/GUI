@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using GUI.Config;
 using GUI.Engine;
@@ -138,7 +139,7 @@ namespace GUI.Forms
 
         private void InitializeComponent()
         {
-            this.Text = "GUI 1.0.3 - Vibrance & QuickRes";
+            this.Text = "GUI 1.0.5 - Vibrance & QuickRes";
             this.ClientSize = new Size(722, 500);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -393,7 +394,7 @@ namespace GUI.Forms
             // System Tray
             // ==========================================
             var trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Open GUI 1.0.3", null, (s, e) => RestoreFromTray());
+            trayMenu.Items.Add("Open GUI 1.0.5", null, (s, e) => RestoreFromTray());
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Exit", null, (s, e) =>
             {
@@ -403,7 +404,7 @@ namespace GUI.Forms
 
             _notifyIcon = new NotifyIcon
             {
-                Text = "GUI 1.0.3",
+                Text = "GUI 1.0.5",
                 Icon = this.Icon,
                 ContextMenuStrip = trayMenu,
                 Visible = true
@@ -817,11 +818,11 @@ namespace GUI.Forms
                         }
                     }
 
-                    if (matchedExe != null && !string.Equals(matchedExe, _currentGameExe, StringComparison.OrdinalIgnoreCase))
+                    if (matchedExe != null)
                     {
                         ApplyGameProfile(matchedExe, _config.Games[matchedExe]);
                     }
-                    else if (matchedExe == null && _currentGameExe != null)
+                    else if (_currentGameExe != null)
                     {
                         ResetToDesktop();
                     }
@@ -858,8 +859,39 @@ namespace GUI.Forms
             // Always start watchdog timer while game profile is active to enforce process liveness & gamma
             _gammaEnforceTimer?.Start();
 
+            // Counteract DirectX / GPU driver swapchain reset when Alt-Tabbing back into exclusive fullscreen
+            ScheduleReapply(exe, prof, 150);
+            ScheduleReapply(exe, prof, 350);
+
             _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
+        }
+
+        private void ScheduleReapply(string exe, GameProfile prof, int delayMs)
+        {
+            Task.Delay(delayMs).ContinueWith(_ =>
+            {
+                if (this.IsDisposed || _isCleanedUp || !this.IsHandleCreated) return;
+                try
+                {
+                    this.BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (this.IsDisposed || _isCleanedUp) return;
+                        if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (prof.VibranceEnabled)
+                            {
+                                _vibrance.SetLevel(prof.Vibrance);
+                            }
+                            if (prof.GammaEnabled || prof.BoostEnabled)
+                            {
+                                _gammaEngine.EnforceIfNeeded();
+                            }
+                        }
+                    });
+                }
+                catch { }
+            });
         }
 
         private void ResetToDesktop()
@@ -977,6 +1009,7 @@ namespace GUI.Forms
             // 2. Reset Gamma & Black Boost back to linear identity default
             try { _gammaEngine.ResetToIdentity(); } catch { }
             try { _gammaEngine.Dispose(); } catch { }
+            try { DwmShaderColorEngine.Uninitialize(); } catch { }
 
             // 3. Restore default screen resolution if changed during this session
             try { DisplayEngine.RestoreDefaultResolution(); } catch { }

@@ -2,6 +2,8 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace GUI.Utils
 {
@@ -42,16 +44,25 @@ namespace GUI.Utils
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr hWnd);
+
         private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+        private const uint EVENT_SYSTEM_MINIMIZEEND = 0x0017;
         private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 
-        private IntPtr _hookHandle = IntPtr.Zero;
+        private IntPtr _foregroundHook = IntPtr.Zero;
+        private IntPtr _minimizeEndHook = IntPtr.Zero;
         private WinEventDelegate? _hookDelegate;
         private string? _lastProcessExe;
+        private readonly object _lock = new object();
 
         public event Action<string?>? ForegroundAppChanged;
 
-        public bool IsRunning => _hookHandle != IntPtr.Zero;
+        public bool IsRunning => _foregroundHook != IntPtr.Zero;
 
         public void Start()
         {
@@ -60,7 +71,8 @@ namespace GUI.Utils
             // Retain strong reference to prevent GC collection of the delegate!
             _hookDelegate = new WinEventDelegate(OnWinEvent);
 
-            _hookHandle = SetWinEventHook(
+            // 1. Hook Foreground window switch (0x0003)
+            _foregroundHook = SetWinEventHook(
                 EVENT_SYSTEM_FOREGROUND,
                 EVENT_SYSTEM_FOREGROUND,
                 IntPtr.Zero,
@@ -70,8 +82,19 @@ namespace GUI.Utils
                 WINEVENT_OUTOFCONTEXT
             );
 
+            // 2. Hook Window Restore / Un-minimize (0x0017) to catch games restoring from Alt-Tab
+            _minimizeEndHook = SetWinEventHook(
+                EVENT_SYSTEM_MINIMIZEEND,
+                EVENT_SYSTEM_MINIMIZEEND,
+                IntPtr.Zero,
+                _hookDelegate,
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT
+            );
+
             // Immediate initial check for currently active window at launch
-            CheckForegroundWindow(GetForegroundWindow());
+            CheckForegroundWindow(GetForegroundWindow(), forceNotify: false);
         }
 
         private void OnWinEvent(
@@ -85,12 +108,66 @@ namespace GUI.Utils
         {
             if (eventType == EVENT_SYSTEM_FOREGROUND)
             {
-                CheckForegroundWindow(hwnd);
+                CheckForegroundWindow(hwnd, forceNotify: false);
+            }
+            else if (eventType == EVENT_SYSTEM_MINIMIZEEND)
+            {
+                // When a window restores from minimized state, enforce notification even if exe matches
+                CheckForegroundWindow(hwnd, forceNotify: true);
             }
         }
 
-        private void CheckForegroundWindow(IntPtr hwnd)
+        private static bool IsTransientShellWindow(IntPtr hwnd)
         {
+            if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return false;
+            var sb = new StringBuilder(256);
+            if (GetClassName(hwnd, sb, sb.Capacity) > 0)
+            {
+                string cls = sb.ToString();
+                if (cls.Equals("ForegroundStaging", StringComparison.OrdinalIgnoreCase) ||
+                    cls.Equals("TaskSwitcherWnd", StringComparison.OrdinalIgnoreCase) ||
+                    cls.Equals("XamlExplorerHostIslandWindow", StringComparison.OrdinalIgnoreCase) ||
+                    cls.Equals("MultitaskingViewFrame", StringComparison.OrdinalIgnoreCase) ||
+                    cls.Equals("Shell_InputSwitchTopLevel", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void ScheduleDelayedForegroundCheck(int delayMs)
+        {
+            Task.Delay(delayMs).ContinueWith(_ =>
+            {
+                try
+                {
+                    IntPtr fg = GetForegroundWindow();
+                    if (fg != IntPtr.Zero && !IsTransientShellWindow(fg))
+                    {
+                        CheckForegroundWindow(fg, forceNotify: false);
+                    }
+                }
+                catch { }
+            });
+        }
+
+        private void CheckForegroundWindow(IntPtr hwnd, bool forceNotify = false)
+        {
+            if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
+            {
+                hwnd = GetForegroundWindow();
+            }
+
+            if (IsTransientShellWindow(hwnd))
+            {
+                // Alt-Tab transient overlay active; schedule re-checks to catch destination window upon key release
+                ScheduleDelayedForegroundCheck(60);
+                ScheduleDelayedForegroundCheck(180);
+                ScheduleDelayedForegroundCheck(350);
+                return;
+            }
+
             string? exeName = null;
 
             if (hwnd != IntPtr.Zero)
@@ -107,10 +184,13 @@ namespace GUI.Utils
                 }
             }
 
-            if (!string.Equals(exeName, _lastProcessExe, StringComparison.OrdinalIgnoreCase))
+            lock (_lock)
             {
-                _lastProcessExe = exeName;
-                ForegroundAppChanged?.Invoke(exeName);
+                if (forceNotify || !string.Equals(exeName, _lastProcessExe, StringComparison.OrdinalIgnoreCase))
+                {
+                    _lastProcessExe = exeName;
+                    ForegroundAppChanged?.Invoke(exeName);
+                }
             }
         }
 
@@ -118,10 +198,15 @@ namespace GUI.Utils
         {
             try
             {
-                if (_hookHandle != IntPtr.Zero)
+                if (_foregroundHook != IntPtr.Zero)
                 {
-                    UnhookWinEvent(_hookHandle);
-                    _hookHandle = IntPtr.Zero;
+                    UnhookWinEvent(_foregroundHook);
+                    _foregroundHook = IntPtr.Zero;
+                }
+                if (_minimizeEndHook != IntPtr.Zero)
+                {
+                    UnhookWinEvent(_minimizeEndHook);
+                    _minimizeEndHook = IntPtr.Zero;
                 }
             }
             catch { }

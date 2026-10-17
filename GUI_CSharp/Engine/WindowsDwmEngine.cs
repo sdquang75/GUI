@@ -5,13 +5,6 @@ namespace GUI.Engine
 {
     public class WindowsDwmEngine : IVibranceEngine
     {
-        [StructLayout(LayoutKind.Sequential)]
-        private struct MAGCOLOREFFECT
-        {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 25)]
-            public float[] transform;
-        }
-
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
         private struct DISPLAY_DEVICE
         {
@@ -30,19 +23,6 @@ namespace GUI.Engine
         [DllImport("user32.dll", CharSet = CharSet.Ansi)]
         private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
 
-        [DllImport("Magnification.dll", CallingConvention = CallingConvention.Winapi)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool MagInitialize();
-
-        [DllImport("Magnification.dll", CallingConvention = CallingConvention.Winapi)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool MagUninitialize();
-
-        [DllImport("Magnification.dll", CallingConvention = CallingConvention.Winapi)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool MagSetFullscreenColorEffect(ref MAGCOLOREFFECT pEffect);
-
-        private bool _isInitialized = false;
         private bool _isDisposed = false;
         private int _currentLevel = 50;
 
@@ -88,9 +68,8 @@ namespace GUI.Engine
         {
             try
             {
-                if (MagInitialize())
+                if (DwmShaderColorEngine.EnsureInitialized())
                 {
-                    _isInitialized = true;
                     IsAvailable = true;
                 }
             }
@@ -110,64 +89,17 @@ namespace GUI.Engine
         {
             if (_isDisposed) return false;
 
-            if (!_isInitialized && !MagInitialize())
+            if (!DwmShaderColorEngine.EnsureInitialized())
             {
                 IsAvailable = false;
                 return false;
             }
-            _isInitialized = true;
+            IsAvailable = true;
 
             level = Math.Clamp(level, 0, 100);
             _currentLevel = level;
 
-            try
-            {
-                MAGCOLOREFFECT effect = new MAGCOLOREFFECT();
-
-                if (level == 50)
-                {
-                    // Identity matrix
-                    effect.transform = new float[25]
-                    {
-                        1f, 0f, 0f, 0f, 0f,
-                        0f, 1f, 0f, 0f, 0f,
-                        0f, 0f, 1f, 0f, 0f,
-                        0f, 0f, 0f, 1f, 0f,
-                        0f, 0f, 0f, 0f, 1f
-                    };
-                }
-                else
-                {
-                    // Saturation factor: 50% = 1.0, 100% = 2.0, 0% = 0.0
-                    float s = level / 50.0f;
-                    float invS = 1.0f - s;
-
-                    // ITU-R BT.709 standard luminance weights
-                    const float lr = 0.2126f;
-                    const float lg = 0.7152f;
-                    const float lb = 0.0722f;
-
-                    float rL = invS * lr;
-                    float gL = invS * lg;
-                    float bL = invS * lb;
-
-                    effect.transform = new float[25]
-                    {
-                        rL + s, rL,     rL,     0f, 0f,
-                        gL,     gL + s, gL,     0f, 0f,
-                        bL,     bL,     bL + s, 0f, 0f,
-                        0f,     0f,     0f,     1f, 0f,
-                        0f,     0f,     0f,     0f, 1f
-                    };
-                }
-
-                return MagSetFullscreenColorEffect(ref effect);
-            }
-            catch (Exception ex)
-            {
-                Program.Log($"WindowsDwmEngine.SetLevel failed: {ex.Message}");
-                return false;
-            }
+            return DwmShaderColorEngine.SetVibrance(level);
         }
 
         public void Restore()
@@ -182,22 +114,8 @@ namespace GUI.Engine
         {
             try
             {
-                if (_isInitialized)
-                {
-                    MAGCOLOREFFECT id = new MAGCOLOREFFECT
-                    {
-                        transform = new float[25]
-                        {
-                            1f, 0f, 0f, 0f, 0f,
-                            0f, 1f, 0f, 0f, 0f,
-                            0f, 0f, 1f, 0f, 0f,
-                            0f, 0f, 0f, 1f, 0f,
-                            0f, 0f, 0f, 0f, 1f
-                        }
-                    };
-                    MagSetFullscreenColorEffect(ref id);
-                    _currentLevel = 50;
-                }
+                DwmShaderColorEngine.ResetVibrance();
+                _currentLevel = 50;
             }
             catch { }
         }
@@ -208,11 +126,6 @@ namespace GUI.Engine
             try
             {
                 ResetToDefault();
-                if (_isInitialized)
-                {
-                    MagUninitialize();
-                    _isInitialized = false;
-                }
             }
             catch { }
             finally

@@ -13,6 +13,7 @@ namespace GUI.Engine
         public string FriendlyName { get; set; } = "";
         public bool Enabled { get; set; } = true;
         public uint DevInst { get; set; } = 0;
+        public bool IsPrimary { get; set; } = false;
     }
 
     public static class MonitorEngine
@@ -34,6 +35,30 @@ namespace GUI.Engine
             public uint DevInst;
             public IntPtr Reserved;
         }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DISPLAY_DEVICEW
+        {
+            public int cb;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string DeviceName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceString;
+            public int StateFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceID;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceKey;
+        }
+
+        private const int DISPLAY_DEVICE_PRIMARY_DEVICE = 0x00000004;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool EnumDisplayDevicesW(
+            string? lpDevice,
+            uint iDevNum,
+            ref DISPLAY_DEVICEW lpDisplayDevice,
+            uint dwFlags);
 
         [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr SetupDiGetClassDevsW(
@@ -168,7 +193,91 @@ namespace GUI.Engine
                 SetupDiDestroyDeviceInfoList(hDevInfo);
             }
 
+            // Determine primary monitor
+            var primaryMonitorIds = new List<string>();
+            try
+            {
+                var adapterDev = new DISPLAY_DEVICEW();
+                adapterDev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
+                for (uint i = 0; EnumDisplayDevicesW(null, i, ref adapterDev, 0); i++)
+                {
+                    bool isPrimary = (adapterDev.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
+                    if (isPrimary)
+                    {
+                        var monDev = new DISPLAY_DEVICEW();
+                        monDev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
+                        for (uint j = 0; EnumDisplayDevicesW(adapterDev.DeviceName, j, ref monDev, 0); j++)
+                        {
+                            if (!string.IsNullOrEmpty(monDev.DeviceID))
+                            {
+                                primaryMonitorIds.Add(monDev.DeviceID);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            if (list.Count == 1)
+            {
+                list[0].IsPrimary = true;
+            }
+            else if (list.Count > 1)
+            {
+                bool foundPrimary = false;
+                foreach (var m in list)
+                {
+                    foreach (var pId in primaryMonitorIds)
+                    {
+                        var parts = pId.Split('\\');
+                        if (parts.Length > 1 && !string.IsNullOrEmpty(parts[1]))
+                        {
+                            if (m.InstanceId.IndexOf(parts[1], StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                m.IsPrimary = true;
+                                foundPrimary = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (foundPrimary) break;
+                }
+
+                if (!foundPrimary && list.Count > 0)
+                {
+                    list[0].IsPrimary = true;
+                }
+            }
+
             return list;
+        }
+
+        public static bool HasAnyDisabledMonitors()
+        {
+            try
+            {
+                var list = EnumerateMonitors();
+                foreach (var m in list)
+                {
+                    if (!m.Enabled) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        public static bool IsPrimaryMonitorDisabled()
+        {
+            try
+            {
+                var list = EnumerateMonitors();
+                foreach (var m in list)
+                {
+                    if (m.IsPrimary && !m.Enabled) return true;
+                }
+            }
+            catch { }
+            return false;
         }
 
         private static string GetDevicePropertyString(IntPtr hDevInfo, ref SP_DEVINFO_DATA devInfo, uint property)
