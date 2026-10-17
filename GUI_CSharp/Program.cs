@@ -24,8 +24,11 @@ namespace GUI
         private static readonly IntPtr HWND_BROADCAST = new IntPtr(0xFFFF);
         public static readonly uint WM_SHOW_EXISTING_INSTANCE = RegisterWindowMessage("WM_VIBE_GAMER_RAMP_SHOW_EXISTING");
 
+        public static bool EnableLogging { get; set; } = false;
+
         public static void Log(string msg)
         {
+            if (!EnableLogging) return;
             try
             {
                 string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GUI");
@@ -58,6 +61,27 @@ namespace GUI
         [STAThread]
         static void Main(string[] args)
         {
+            if (Array.Exists(args, a =>
+                string.Equals(a, "--debug", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(a, "--log", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(a, "-d", StringComparison.OrdinalIgnoreCase)))
+            {
+                EnableLogging = true;
+            }
+            else
+            {
+                try
+                {
+                    string appDataFlag = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GUI", "debug.flag");
+                    string localFlag = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.flag");
+                    if (File.Exists(appDataFlag) || File.Exists(localFlag))
+                    {
+                        EnableLogging = true;
+                    }
+                }
+                catch { }
+            }
+
             Log("Program.Main started with args: " + string.Join(" ", args));
 
             if (args.Length >= 3 && args[0] == "--monitor-op")

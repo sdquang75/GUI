@@ -944,8 +944,9 @@ namespace GUI.Forms
             // 1. CRITICAL PATH: Apply contrast immediately to GPU hardware (0.00ms delay!)
             _gammaEngine.ApplyContrast(effectiveContrast);
 
-            // 2. NON-CRITICAL PATH: Log state changes asynchronously (never block hardware thread!)
-            if (Math.Abs(f - _lastLoggedFlashedFraction) > 0.02)
+            // 2. NON-CRITICAL PATH: Log state changes asynchronously (only if debug logging is explicitly enabled)
+            bool shouldLog = (f <= 0.01 && _lastLoggedFlashedFraction > 0.01) || Math.Abs(f - _lastLoggedFlashedFraction) > 0.05;
+            if (Program.EnableLogging && shouldLog)
             {
                 _lastLoggedFlashedFraction = f;
                 ThreadPool.QueueUserWorkItem(_ =>

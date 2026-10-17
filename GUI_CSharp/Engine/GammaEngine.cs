@@ -85,6 +85,10 @@ namespace GUI.Engine
         private bool _switchedToDwmDueToDisabledMonitor = false;
         private readonly object _lock = new object();
 
+        private readonly double[] _cachedBaseCurve = new double[256];
+        private double _cachedCurveGamma = -1.0;
+        private double _cachedCurveBoost = -1.0;
+
         public bool IsCustomActive { get; private set; }
         public GammaPipelineMode ActiveMode { get; private set; } = GammaPipelineMode.HardwareLut;
         public double CurrentGamma => _lastGamma;
@@ -93,6 +97,28 @@ namespace GUI.Engine
 
         public GammaEngine()
         {
+        }
+
+        private void EnsureBaseCurve(double gamma, double blackBoost)
+        {
+            if (Math.Abs(_cachedCurveGamma - gamma) < 0.0001 && Math.Abs(_cachedCurveBoost - blackBoost) < 0.0001)
+            {
+                return;
+            }
+
+            double baseP = gamma / 2.20;
+            for (int i = 0; i < 256; i++)
+            {
+                double x = i / 255.0;
+                double yGamma = x > 0 ? Math.Pow(x, baseP) : 0.0;
+                double lift = (x > 0 && blackBoost > 0)
+                    ? Math.Pow(1.0 - x, 4) * x * 3.8 * blackBoost
+                    : 0.0;
+                _cachedBaseCurve[i] = yGamma + lift;
+            }
+
+            _cachedCurveGamma = gamma;
+            _cachedCurveBoost = blackBoost;
         }
 
         private const int SM_CMONITORS = 80;
@@ -189,6 +215,8 @@ namespace GUI.Engine
                     return true;
                 }
 
+                EnsureBaseCurve(_lastGamma, _lastBlackBoost);
+
                 RAMP newRamp = new RAMP();
                 if (_lastContrast < 0.001)
                 {
@@ -196,16 +224,10 @@ namespace GUI.Engine
                 }
                 else
                 {
-                    double baseP = _lastGamma / 2.20;
+                    double c = _lastContrast;
                     for (int i = 0; i < 256; i++)
                     {
-                        double x = i / 255.0;
-                        double yGamma = x > 0 ? Math.Pow(x, baseP) : 0.0;
-                        double lift = (x > 0 && _lastBlackBoost > 0)
-                            ? Math.Pow(1.0 - x, 4) * x * 3.8 * _lastBlackBoost
-                            : 0.0;
-
-                        double y = Math.Clamp((yGamma + lift) * _lastContrast, 0.0, 1.0);
+                        double y = Math.Clamp(_cachedBaseCurve[i] * c, 0.0, 1.0);
                         ushort val = (ushort)Math.Clamp((int)(y * 65535.0 + 0.5), 0, 65535);
 
                         newRamp.Red[i] = val;
@@ -234,17 +256,10 @@ namespace GUI.Engine
                 {
                     // Fallback: If 0-contrast was rejected by Windows GDI (GdiIcmGammaRange not yet set),
                     // clamp to 0.50 (the lowest contrast allowed without registry unlock)
-                    double baseP = _lastGamma / 2.20;
                     RAMP fallbackRamp = new RAMP();
                     for (int i = 0; i < 256; i++)
                     {
-                        double x = i / 255.0;
-                        double yGamma = x > 0 ? Math.Pow(x, baseP) : 0.0;
-                        double lift = (x > 0 && _lastBlackBoost > 0)
-                            ? Math.Pow(1.0 - x, 4) * x * 3.8 * _lastBlackBoost
-                            : 0.0;
-
-                        double y = Math.Clamp((yGamma + lift) * 0.50, 0.0, 1.0);
+                        double y = Math.Clamp(_cachedBaseCurve[i] * 0.50, 0.0, 1.0);
                         ushort val = (ushort)Math.Clamp((int)(y * 65535.0 + 0.5), 0, 65535);
 
                         fallbackRamp.Red[i] = val;
