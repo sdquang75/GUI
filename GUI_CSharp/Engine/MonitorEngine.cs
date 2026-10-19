@@ -278,7 +278,7 @@ namespace GUI.Engine
                 }
 
                 long now = Environment.TickCount64;
-                if (now - _lastDisabledCheckTick < 4000)
+                if (_lastDisabledCheckTick != 0 && (now - _lastDisabledCheckTick < 60000))
                 {
                     return _cachedHasDisabled;
                 }

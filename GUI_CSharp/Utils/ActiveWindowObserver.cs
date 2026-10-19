@@ -57,10 +57,12 @@ namespace GUI.Utils
         private IntPtr _foregroundHook = IntPtr.Zero;
         private IntPtr _minimizeEndHook = IntPtr.Zero;
         private WinEventDelegate? _hookDelegate;
+        private IntPtr _lastHwnd = IntPtr.Zero;
         private string? _lastProcessExe;
+        private int _lastProcessId;
         private readonly object _lock = new object();
 
-        public event Action<string?>? ForegroundAppChanged;
+        public event Action<string?, int>? ForegroundAppChanged;
 
         public bool IsRunning => _foregroundHook != IntPtr.Zero;
 
@@ -168,15 +170,25 @@ namespace GUI.Utils
                 return;
             }
 
+            lock (_lock)
+            {
+                if (!forceNotify && hwnd != IntPtr.Zero && hwnd == _lastHwnd)
+                {
+                    return;
+                }
+            }
+
             string? exeName = null;
+            int pid = 0;
 
             if (hwnd != IntPtr.Zero)
             {
-                uint pid;
-                GetWindowThreadProcessId(hwnd, out pid);
-                if (pid != 0)
+                uint rawPid;
+                GetWindowThreadProcessId(hwnd, out rawPid);
+                if (rawPid != 0)
                 {
-                    string name = ProcessHelper.GetProcessExeName((int)pid);
+                    pid = (int)rawPid;
+                    string name = ProcessHelper.GetProcessExeName(pid);
                     if (!string.IsNullOrEmpty(name))
                     {
                         exeName = name;
@@ -186,10 +198,12 @@ namespace GUI.Utils
 
             lock (_lock)
             {
-                if (forceNotify || !string.Equals(exeName, _lastProcessExe, StringComparison.OrdinalIgnoreCase))
+                _lastHwnd = hwnd;
+                if (forceNotify || pid != _lastProcessId || !string.Equals(exeName, _lastProcessExe, StringComparison.OrdinalIgnoreCase))
                 {
                     _lastProcessExe = exeName;
-                    ForegroundAppChanged?.Invoke(exeName);
+                    _lastProcessId = pid;
+                    ForegroundAppChanged?.Invoke(exeName, pid);
                 }
             }
         }
@@ -211,6 +225,12 @@ namespace GUI.Utils
             }
             catch { }
             _hookDelegate = null;
+            lock (_lock)
+            {
+                _lastHwnd = IntPtr.Zero;
+                _lastProcessExe = null;
+                _lastProcessId = 0;
+            }
         }
 
         public void Dispose()

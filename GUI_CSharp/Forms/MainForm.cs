@@ -51,6 +51,7 @@ namespace GUI.Forms
         private NotifyIcon _notifyIcon;
         private System.Windows.Forms.Timer? _gammaEnforceTimer;
         private string? _currentGameExe = null;
+        private int _currentGamePid = 0;
         private bool _isExplicitExit = false;
         private bool _isCleanedUp = false;
 
@@ -86,10 +87,26 @@ namespace GUI.Forms
             {
                 if (!_isCleanedUp && _currentGameExe != null)
                 {
-                    string procName = Path.GetFileNameWithoutExtension(_currentGameExe);
-                    var procs = Process.GetProcessesByName(procName);
-                    bool isRunning = procs.Length > 0;
-                    foreach (var p in procs) { try { p.Dispose(); } catch { } }
+                    bool isRunning = false;
+                    if (_currentGamePid > 0)
+                    {
+                        try
+                        {
+                            using var proc = Process.GetProcessById(_currentGamePid);
+                            isRunning = !proc.HasExited;
+                        }
+                        catch
+                        {
+                            isRunning = false;
+                        }
+                    }
+                    else
+                    {
+                        string procName = Path.GetFileNameWithoutExtension(_currentGameExe);
+                        var procs = Process.GetProcessesByName(procName);
+                        isRunning = procs.Length > 0;
+                        foreach (var p in procs) { try { p.Dispose(); } catch { } }
+                    }
 
                     if (!isRunning)
                     {
@@ -143,7 +160,7 @@ namespace GUI.Forms
 
         private void InitializeComponent()
         {
-            this.Text = "GUI 1.1.2 - Vibrance & QuickRes";
+            this.Text = "GUI 1.1.3 - Vibrance & QuickRes";
             this.ClientSize = new Size(722, 500);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -398,7 +415,7 @@ namespace GUI.Forms
             // System Tray
             // ==========================================
             var trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Open GUI 1.1.2", null, (s, e) => RestoreFromTray());
+            trayMenu.Items.Add("Open GUI 1.1.3", null, (s, e) => RestoreFromTray());
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Exit", null, (s, e) =>
             {
@@ -408,7 +425,7 @@ namespace GUI.Forms
 
             _notifyIcon = new NotifyIcon
             {
-                Text = "GUI 1.1.2",
+                Text = "GUI 1.1.3",
                 Icon = this.Icon,
                 ContextMenuStrip = trayMenu,
                 Visible = true
@@ -461,6 +478,7 @@ namespace GUI.Forms
 
         private const int WM_SYSCOMMAND = 0x0112;
         private const int SC_CLOSE = 0xF060;
+        private const int WM_DISPLAYCHANGE = 0x007E;
 
         protected override void WndProc(ref Message m)
         {
@@ -468,6 +486,15 @@ namespace GUI.Forms
             {
                 RestoreFromTray();
                 return;
+            }
+
+            if (m.Msg == WM_DISPLAYCHANGE)
+            {
+                MonitorEngine.InvalidateMonitorCache();
+                if (this.Visible && !_startMinimized)
+                {
+                    try { RefreshCurrentResolution(); } catch { }
+                }
             }
 
             if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_CLOSE && !_isExplicitExit)
@@ -800,7 +827,7 @@ namespace GUI.Forms
             _observer.Start();
         }
 
-        private void OnForegroundAppChanged(string? exeName)
+        private void OnForegroundAppChanged(string? exeName, int pid)
         {
             if (this.IsDisposed || _isCleanedUp || !this.IsHandleCreated) return;
 
@@ -810,21 +837,18 @@ namespace GUI.Forms
                 {
                     if (this.IsDisposed || _isCleanedUp) return;
                     string? matchedExe = null;
+                    GameProfile? matchedProf = null;
                     if (!string.IsNullOrEmpty(exeName))
                     {
-                        foreach (var key in _config.Games.Keys)
+                        if (_config.Games.TryGetValue(exeName, out matchedProf))
                         {
-                            if (string.Equals(key, exeName, StringComparison.OrdinalIgnoreCase))
-                            {
-                                matchedExe = key;
-                                break;
-                            }
+                            matchedExe = exeName;
                         }
                     }
 
-                    if (matchedExe != null)
+                    if (matchedExe != null && matchedProf != null)
                     {
-                        ApplyGameProfile(matchedExe, _config.Games[matchedExe]);
+                        ApplyGameProfile(matchedExe, matchedProf, pid);
                     }
                     else if (_currentGameExe != null)
                     {
@@ -835,10 +859,14 @@ namespace GUI.Forms
             catch { }
         }
 
-        private void ApplyGameProfile(string exe, GameProfile prof)
+        private void ApplyGameProfile(string exe, GameProfile prof, int pid = 0)
         {
             if (_isCleanedUp) return;
             _currentGameExe = exe;
+            if (pid > 0)
+            {
+                _currentGamePid = pid;
+            }
 
             if (prof.VibranceEnabled)
             {
@@ -901,6 +929,7 @@ namespace GUI.Forms
                             {
                                 isCs2Active = true;
                                 _currentGameExe = "cs2.exe";
+                                _currentGamePid = (int)pid;
                             }
                         }
                     }
@@ -994,6 +1023,7 @@ namespace GUI.Forms
         {
             if (_isCleanedUp) return;
             _currentGameExe = null;
+            _currentGamePid = 0;
             _gammaEnforceTimer?.Stop();
             _vibrance.Restore();
             _gammaEngine.Restore();
@@ -1097,6 +1127,7 @@ namespace GUI.Forms
             }
 
             _currentGameExe = null;
+            _currentGamePid = 0;
 
             // 1. Reset Vibrance (NVIDIA DVC / Windows DWM) back to default (50%)
             try { _vibrance.ResetToDefault(); } catch { }
