@@ -215,21 +215,10 @@ namespace GUI.Engine
                         }
                     }
 
-                    // In spectator mode, playerSteamId is the target player and differs from our providerSteamId
-                    bool isSpectatingOther = !string.IsNullOrEmpty(playerSteamId) &&
-                                             !string.IsNullOrEmpty(providerSteamId) &&
-                                             playerSteamId.Length >= 15 && providerSteamId.Length >= 15 &&
-                                             !string.Equals(providerSteamId, playerSteamId, StringComparison.OrdinalIgnoreCase);
-
-                    // If health is explicitly 0, player is dead
-                    if (health == 0)
-                    {
-                        isSpectatingOther = true;
-                    }
-
-                    double effectiveFlashed = isSpectatingOther ? 0.0 : flashedFraction;
-                    double effectiveSmoked = isSpectatingOther ? 0.0 : smokedFraction;
-                    bool isActive = !isSpectatingOther;
+                    // Always enable Black Flash even when dead (health == 0) or spectating others
+                    double effectiveFlashed = flashedFraction;
+                    double effectiveSmoked = smokedFraction;
+                    bool isActive = true;
 
                     _lastFlashed = effectiveFlashed;
                     _lastSmoked = effectiveSmoked;
