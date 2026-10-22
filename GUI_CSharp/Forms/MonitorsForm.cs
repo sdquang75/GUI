@@ -121,7 +121,7 @@ namespace GUI.Forms
                 return;
             }
 
-            _btnDisableSelected.Enabled = m.Enabled && !m.IsPrimary;
+            _btnDisableSelected.Enabled = m.Enabled;
             _btnEnableSelected.Enabled = !m.Enabled;
         }
 
@@ -168,12 +168,6 @@ namespace GUI.Forms
             if (m.Enabled == enable)
             {
                 MessageBox.Show(this, $"Monitor is already {(enable ? "enabled" : "disabled")}.", "Notice", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            if (!enable && m.IsPrimary)
-            {
-                MessageBox.Show(this, "The primary display cannot be disabled.", "Action Not Allowed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
