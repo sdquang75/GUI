@@ -32,6 +32,9 @@ namespace GUI.Forms
         private TrackBar _tbBoost;
         private Label _lblBoostVal;
 
+        private ComboBox _cmbDisplayTarget;
+        private string? _prevTargetDisplay;
+
         private GroupBox? _gbAntiFlash;
         private CheckBox? _chkAntiFlash;
         private TrackBar? _tbMaxDim;
@@ -86,7 +89,7 @@ namespace GUI.Forms
         {
             this.Text = _exeName;
             bool isCs2 = string.Equals(_exeName, "cs2.exe", StringComparison.OrdinalIgnoreCase);
-            this.Size = isCs2 ? new Size(360, 526) : new Size(360, 390);
+            this.Size = isCs2 ? new Size(360, 562) : new Size(360, 426);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -225,12 +228,34 @@ namespace GUI.Forms
             gbBoost.Controls.Add(_lblBoostVal);
             gbBoost.Controls.Add(_tbBoost);
 
+            // Monitor the game is played on: colors / black flash apply only there (the other screen is for stream / info)
+            var lblDisplayTarget = new Label
+            {
+                Text = "Apply to:",
+                Location = new Point(16, 299),
+                Size = new Size(70, 20)
+            };
+
+            _cmbDisplayTarget = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Location = new Point(90, 296),
+                Size = new Size(240, 24)
+            };
+            _cmbDisplayTarget.SelectedIndexChanged += (s, e) =>
+            {
+                if (_isTesting) ApplyPreview();
+            };
+
+            this.Controls.Add(lblDisplayTarget);
+            this.Controls.Add(_cmbDisplayTarget);
+
             if (isCs2)
             {
                 _gbAntiFlash = new GroupBox
                 {
                     Text = "CS2 Anti-Flashbang",
-                    Location = new Point(14, 294),
+                    Location = new Point(14, 330),
                     Size = new Size(316, 142),
                     Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
                 };
@@ -316,7 +341,7 @@ namespace GUI.Forms
             }
 
             // Bottom Buttons: Save (left), Test (center), Cancel (right)
-            int btnY = isCs2 ? 444 : 305;
+            int btnY = isCs2 ? 480 : 341;
             _btnSave = new Button
             {
                 Text = "Save",
@@ -371,6 +396,8 @@ namespace GUI.Forms
             _chkBoost.Checked = _profile.BoostEnabled;
             _tbBoost.Value = Math.Clamp(_profile.Boost, 0, 100);
             _lblBoostVal.Text = $"{_tbBoost.Value}%";
+
+            PopulateMonitorList();
 
             if (_chkAntiFlash != null) _chkAntiFlash.Checked = _profile.Cs2AntiFlashEnabled;
             if (_tbMaxDim != null)
@@ -550,6 +577,7 @@ namespace GUI.Forms
                 if (_gammaEngine != null)
                 {
                     _gammaEngine.SaveState(out _prevGammaState);
+                    _prevTargetDisplay = _gammaEngine.TargetDisplay;
                 }
                 _btnTest.Text = "Stop Test";
                 ApplyPreview();
@@ -566,13 +594,21 @@ namespace GUI.Forms
         {
             if (!_isTesting) return;
 
-            if (_vibrance != null)
+            var selected = _cmbDisplayTarget.SelectedItem as MonitorItem;
+            string? target = selected != null && selected.Connected ? selected.GdiName : MonitorEngine.GetPrimaryDisplayName();
+
+            if (_vibrance is UnifiedVibranceEngine unified)
+            {
+                unified.Apply(_tbVibrance.Value, target);
+            }
+            else if (_vibrance != null)
             {
                 _vibrance.SetLevel(_tbVibrance.Value);
             }
 
             if (_gammaEngine != null)
             {
+                _gammaEngine.SetTargetDisplay(target);
                 if (_chkGamma.Checked || _chkBoost.Checked)
                 {
                     double g = _chkGamma.Checked ? (_tbGamma.Value / 100.0) : 2.20;
@@ -595,8 +631,101 @@ namespace GUI.Forms
 
             if (_gammaEngine != null)
             {
+                // Reset every LUT before switching back, so the preview monitor is not left tinted
+                _gammaEngine.Restore();
+                _gammaEngine.SetTargetDisplay(_prevTargetDisplay);
                 _gammaEngine.RestoreState(in _prevGammaState);
             }
+        }
+
+        private sealed class MonitorItem
+        {
+            public string GdiName = "";
+            public string DevicePath = "";
+            public string FriendlyName = "";
+            public bool Connected = true;
+            public string Label = "";
+            public override string ToString() => Label;
+        }
+
+        // Lists the monitors currently connected, e.g. "1. DELL S2721DGF · DisplayPort (NVIDIA DVC) — Primary".
+        // A saved monitor that is unplugged right now stays selectable as "(not connected)" so the choice is kept.
+        private void PopulateMonitorList()
+        {
+            _cmbDisplayTarget.Items.Clear();
+            var monitors = MonitorEngine.GetActiveMonitors();
+            var unified = _vibrance as UnifiedVibranceEngine;
+
+            int index = 1;
+            foreach (var m in monitors)
+            {
+                string tech = unified != null
+                    ? unified.DescribeTechnology(m.GdiName, m.AdapterName)
+                    : UnifiedVibranceEngine.DescribeNonNvidia(m.AdapterName);
+                _cmbDisplayTarget.Items.Add(new MonitorItem
+                {
+                    GdiName = m.GdiName,
+                    DevicePath = m.DevicePath,
+                    FriendlyName = m.FriendlyName,
+                    Label = $"{index}. {m.FriendlyName} · {m.Connection} ({tech}){(m.IsPrimary ? " — Primary" : "")}"
+                });
+                index++;
+            }
+
+            int selectedIndex = -1;
+            if (!string.IsNullOrEmpty(_profile.DisplayDevicePath))
+            {
+                for (int i = 0; i < _cmbDisplayTarget.Items.Count; i++)
+                {
+                    if (_cmbDisplayTarget.Items[i] is MonitorItem it &&
+                        string.Equals(it.DevicePath, _profile.DisplayDevicePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        selectedIndex = i;
+                        break;
+                    }
+                }
+
+                if (selectedIndex < 0)
+                {
+                    // Same monitor plugged into another port: match by name when unambiguous
+                    int nameMatch = -1, count = 0;
+                    for (int i = 0; i < _cmbDisplayTarget.Items.Count; i++)
+                    {
+                        if (_cmbDisplayTarget.Items[i] is MonitorItem it &&
+                            !string.IsNullOrEmpty(_profile.DisplayName) &&
+                            string.Equals(it.FriendlyName, _profile.DisplayName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            nameMatch = i;
+                            count++;
+                        }
+                    }
+                    if (count == 1) selectedIndex = nameMatch;
+                }
+
+                if (selectedIndex < 0)
+                {
+                    string name = string.IsNullOrEmpty(_profile.DisplayName) ? "Saved monitor" : _profile.DisplayName;
+                    _cmbDisplayTarget.Items.Add(new MonitorItem
+                    {
+                        DevicePath = _profile.DisplayDevicePath,
+                        FriendlyName = _profile.DisplayName,
+                        Connected = false,
+                        Label = $"{name} (not connected)"
+                    });
+                    selectedIndex = _cmbDisplayTarget.Items.Count - 1;
+                }
+            }
+
+            // Default: the primary monitor (listed first)
+            if (selectedIndex < 0 && _cmbDisplayTarget.Items.Count > 0) selectedIndex = 0;
+            if (selectedIndex >= 0) _cmbDisplayTarget.SelectedIndex = selectedIndex;
+
+            int widest = _cmbDisplayTarget.Width;
+            foreach (var item in _cmbDisplayTarget.Items)
+            {
+                widest = Math.Max(widest, TextRenderer.MeasureText(item.ToString(), _cmbDisplayTarget.Font).Width + 24);
+            }
+            _cmbDisplayTarget.DropDownWidth = widest;
         }
 
         private void OnSave()
@@ -620,7 +749,9 @@ namespace GUI.Forms
                 Boost = _tbBoost.Value,
                 Cs2AntiFlashEnabled = _chkAntiFlash?.Checked ?? _profile.Cs2AntiFlashEnabled,
                 Cs2AntiSmokeEnabled = false,
-                Cs2AntiFlashMaxDim = _tbMaxDim?.Value ?? _profile.Cs2AntiFlashMaxDim
+                Cs2AntiFlashMaxDim = _tbMaxDim?.Value ?? _profile.Cs2AntiFlashMaxDim,
+                DisplayDevicePath = (_cmbDisplayTarget.SelectedItem as MonitorItem)?.DevicePath ?? _profile.DisplayDevicePath,
+                DisplayName = (_cmbDisplayTarget.SelectedItem as MonitorItem)?.FriendlyName ?? _profile.DisplayName
             };
 
             this.DialogResult = DialogResult.OK;

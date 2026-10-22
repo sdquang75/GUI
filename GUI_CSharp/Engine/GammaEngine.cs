@@ -198,16 +198,107 @@ namespace GUI.Engine
             return anySuccess;
         }
 
-        private readonly struct DisplayTarget
+        // Writes the ramp only to the profile's target monitor (null = every monitor).
+        // A target that is no longer attached (e.g. HDMI unplugged) falls back to every monitor.
+        private unsafe bool SetRampToTargets(RAMP* pRamp)
         {
-            public DisplayTarget(string name, bool isPrimary)
+            string? target = _targetDisplay;
+            if (target == null) return SetRampToAllDisplays(pRamp);
+
+            DisplayTarget? match = null;
+            foreach (var t in GetDisplayTargets())
+            {
+                if (string.Equals(t.Name, target, StringComparison.OrdinalIgnoreCase))
+                {
+                    match = t;
+                    break;
+                }
+            }
+            if (match == null) return SetRampToAllDisplays(pRamp);
+
+            bool isPrimary = match.Value.IsPrimary;
+            IntPtr hdc = isPrimary ? GetDC(IntPtr.Zero) : CreateDC(null, target, null, IntPtr.Zero);
+            if (hdc == IntPtr.Zero) return false;
+            try
+            {
+                for (int retry = 0; retry < 5; retry++)
+                {
+                    if (SetDeviceGammaRamp(hdc, pRamp)) return true;
+                }
+                return false;
+            }
+            finally
+            {
+                if (isPrimary) ReleaseDC(IntPtr.Zero, hdc);
+                else DeleteDC(hdc);
+            }
+        }
+
+        public readonly struct DisplayTarget
+        {
+            public DisplayTarget(string name, bool isPrimary, string adapterName)
             {
                 Name = name;
                 IsPrimary = isPrimary;
+                AdapterName = adapterName;
             }
 
             public string Name { get; }
             public bool IsPrimary { get; }
+            // GPU driving this output (e.g. Intel UHD vs NVIDIA GeForce on a hybrid laptop)
+            public string AdapterName { get; }
+        }
+
+        // Monitors currently attached to the desktop (cached, see GetDisplayTargets)
+        public static IReadOnlyList<DisplayTarget> GetAttachedDisplays() => GetDisplayTargets();
+
+        private string? _targetDisplay;
+
+        public string? TargetDisplay => _targetDisplay;
+
+        // Restricts gamma / black flash to one monitor (GDI name like "\\.\DISPLAY2"); null = all monitors.
+        // The DWM fallback path stays desktop-wide (Magnification API has no per-monitor effect).
+        public void SetTargetDisplay(string? displayName)
+        {
+            lock (_lock)
+            {
+                if (_isDisposed) return;
+                if (string.Equals(_targetDisplay, displayName, StringComparison.OrdinalIgnoreCase)) return;
+
+                Program.Log($"GammaEngine: target display -> {displayName ?? "all monitors"}");
+                _targetDisplay = displayName;
+
+                if (ActiveMode == GammaPipelineMode.HardwareLut)
+                {
+                    // Clear every LUT so the previous target is not left tinted / dimmed, then re-apply on the new one
+                    RAMP identity = BuildIdentityRamp();
+                    SetRampToAllDisplays(&identity);
+                    if (IsCustomActive)
+                    {
+                        fixed (RAMP* pRamp = &_lastAppliedRamp)
+                        {
+                            SetRampToTargets(pRamp);
+                        }
+                    }
+                }
+                else if (displayName != null)
+                {
+                    Program.Log("GammaEngine: DWM compositor path is active -> effect stays desktop-wide (no per-monitor support).");
+                }
+            }
+        }
+
+        private static RAMP BuildIdentityRamp()
+        {
+            RAMP identity = new RAMP();
+            for (int i = 0; i < 256; i++)
+            {
+                ushort val = (ushort)Math.Clamp((int)((i / 255.0) * 65535.0 + 0.5), 0, 65535);
+                identity.Red[i] = val;
+                identity.Green[i] = val;
+                identity.Blue[i] = val;
+            }
+            return identity;
         }
 
         private sealed class DisplayTargetCache
@@ -248,7 +339,10 @@ namespace GUI.Engine
                     bool mirror = (dev.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) != 0;
                     if (attached && !mirror && !string.IsNullOrEmpty(dev.DeviceName))
                     {
-                        list.Add(new DisplayTarget(dev.DeviceName, (dev.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0));
+                        list.Add(new DisplayTarget(
+                            dev.DeviceName,
+                            (dev.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0,
+                            dev.DeviceString ?? ""));
                     }
                 }
             }
@@ -256,7 +350,24 @@ namespace GUI.Engine
 
             var targets = list.ToArray();
             _displayCache = new DisplayTargetCache { Targets = targets, Tick = now };
+            LogTopologyIfChanged(targets);
             return targets;
+        }
+
+        private static string _lastTopology = "";
+
+        // Logs which GPU drives each attached monitor whenever the layout changes (HDMI plug/unplug, MUX switch...)
+        private static void LogTopologyIfChanged(DisplayTarget[] targets)
+        {
+            var parts = new List<string>(targets.Length);
+            foreach (var t in targets)
+            {
+                parts.Add($"{t.Name}{(t.IsPrimary ? " (primary)" : "")} on {t.AdapterName}");
+            }
+            string topology = string.Join("; ", parts);
+            if (topology == _lastTopology) return;
+            _lastTopology = topology;
+            Program.Log($"Display topology: {(topology.Length > 0 ? topology : "none")}");
         }
 
         public bool ApplyCurve(double gamma = 1.80, double blackBoost = 0.0, double contrast = 1.0)
@@ -331,7 +442,7 @@ namespace GUI.Engine
                     && _lastContrast <= _rejectedContrastCeiling
                     && nowTick - _rejectedContrastTick < RejectedContrastMemoMs;
 
-                bool success = !knownRejected && SetRampToAllDisplays(&newRamp);
+                bool success = !knownRejected && SetRampToTargets(&newRamp);
                 if (!success && _lastContrast < 0.50)
                 {
                     // Fallback: If 0-contrast was rejected by Windows GDI (GdiIcmGammaRange not yet set),
@@ -346,7 +457,7 @@ namespace GUI.Engine
                         fallbackRamp.Green[i] = val;
                         fallbackRamp.Blue[i] = val;
                     }
-                    success = SetRampToAllDisplays(&fallbackRamp);
+                    success = SetRampToTargets(&fallbackRamp);
                     if (success)
                     {
                         _lastAppliedRamp = fallbackRamp;
@@ -430,7 +541,7 @@ namespace GUI.Engine
                     DwmShaderColorEngine.ResetGammaAndBoost();
                     fixed (RAMP* pRamp = &_lastAppliedRamp)
                     {
-                        if (SetRampToAllDisplays(pRamp))
+                        if (SetRampToTargets(pRamp))
                         {
                             ActiveMode = GammaPipelineMode.HardwareLut;
                             return true;
@@ -452,7 +563,10 @@ namespace GUI.Engine
                 bool needsEnforce = false;
                 RAMP currentRamp;
 
-                IntPtr hdc = GetDC(IntPtr.Zero);
+                // Read back from the monitor the profile targets (the game may run on a non-primary display)
+                string? target = _targetDisplay;
+                bool readTarget = target != null && !string.Equals(target, MonitorEngine.GetPrimaryDisplayName(), StringComparison.OrdinalIgnoreCase);
+                IntPtr hdc = readTarget ? CreateDC(null, target, null, IntPtr.Zero) : GetDC(IntPtr.Zero);
                 if (hdc != IntPtr.Zero)
                 {
                     if (GetDeviceGammaRamp(hdc, &currentRamp))
@@ -464,7 +578,8 @@ namespace GUI.Engine
                             needsEnforce = true;
                         }
                     }
-                    ReleaseDC(IntPtr.Zero, hdc);
+                    if (readTarget) DeleteDC(hdc);
+                    else ReleaseDC(IntPtr.Zero, hdc);
                 }
                 else
                 {
@@ -488,7 +603,7 @@ namespace GUI.Engine
                 {
                     fixed (RAMP* pRamp = &_lastAppliedRamp)
                     {
-                        bool success = SetRampToAllDisplays(pRamp);
+                        bool success = SetRampToTargets(pRamp);
                         if (!success)
                         {
                             Program.Log("GammaEngine.EnforceIfNeeded: Hardware LUT re-apply failed -> switching to DWM Shader.");
@@ -534,14 +649,8 @@ namespace GUI.Engine
         {
             try
             {
-                RAMP identity = new RAMP();
-                for (int i = 0; i < 256; i++)
-                {
-                    ushort val = (ushort)Math.Clamp((int)((i / 255.0) * 65535.0 + 0.5), 0, 65535);
-                    identity.Red[i] = val;
-                    identity.Green[i] = val;
-                    identity.Blue[i] = val;
-                }
+                // Always every monitor, so a previous target never stays tinted / dimmed
+                RAMP identity = BuildIdentityRamp();
                 _lastAppliedRamp = identity;
                 SetRampToAllDisplays(&identity);
             }
@@ -588,7 +697,7 @@ namespace GUI.Engine
                     {
                         fixed (RAMP* pRamp = &_lastAppliedRamp)
                         {
-                            SetRampToAllDisplays(pRamp);
+                            SetRampToTargets(pRamp);
                         }
                     }
                 }
@@ -628,7 +737,7 @@ namespace GUI.Engine
                     {
                         fixed (RAMP* pRamp = &_lastAppliedRamp)
                         {
-                            SetRampToAllDisplays(pRamp);
+                            SetRampToTargets(pRamp);
                         }
                     }
                 }

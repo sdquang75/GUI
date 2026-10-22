@@ -54,6 +54,10 @@ namespace GUI.Forms
         private readonly object _gamesLock = new();
         private string? _currentGameExe = null;
         private int _currentGamePid = 0;
+        // Profile in use, re-applied (with its saved monitor) after a display topology change
+        private GameProfile? _currentGameProfile = null;
+        // Debounces WM_DISPLAYCHANGE bursts (HDMI plug/unplug, MUX switch) before re-enumerating displays
+        private System.Windows.Forms.Timer? _displayChangeTimer;
         private bool _isExplicitExit = false;
         private bool _isCleanedUp = false;
 
@@ -89,6 +93,13 @@ namespace GUI.Forms
             {
                 _saveConfigDebounceTimer.Stop();
                 ConfigManager.Save(_config);
+            };
+
+            _displayChangeTimer = new System.Windows.Forms.Timer { Interval = 500 };
+            _displayChangeTimer.Tick += (s, e) =>
+            {
+                _displayChangeTimer.Stop();
+                OnDisplayTopologyChanged();
             };
 
             _gammaEnforceTimer = new System.Windows.Forms.Timer { Interval = 1000 };
@@ -507,6 +518,8 @@ namespace GUI.Forms
             if (m.Msg == WM_DISPLAYCHANGE)
             {
                 MonitorEngine.InvalidateMonitorCache();
+                _displayChangeTimer?.Stop();
+                _displayChangeTimer?.Start();
                 if (this.Visible && !_startMinimized)
                 {
                     try { RefreshCurrentResolution(); } catch { }
@@ -720,7 +733,9 @@ namespace GUI.Forms
                         Boost = existing.Boost,
                         Cs2AntiFlashEnabled = existing.Cs2AntiFlashEnabled,
                         Cs2AntiSmokeEnabled = existing.Cs2AntiSmokeEnabled,
-                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim
+                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim,
+                        DisplayDevicePath = existing.DisplayDevicePath,
+                        DisplayName = existing.DisplayName
                     };
                 }
                 else
@@ -789,7 +804,9 @@ namespace GUI.Forms
                         Boost = existing.Boost,
                         Cs2AntiFlashEnabled = existing.Cs2AntiFlashEnabled,
                         Cs2AntiSmokeEnabled = existing.Cs2AntiSmokeEnabled,
-                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim
+                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim,
+                        DisplayDevicePath = existing.DisplayDevicePath,
+                        DisplayName = existing.DisplayName
                     };
                 }
                 else
@@ -936,19 +953,16 @@ namespace GUI.Forms
         {
             if (_isCleanedUp) return;
             _currentGameExe = exe;
+            _currentGameProfile = prof;
             if (pid > 0)
             {
                 _currentGamePid = pid;
             }
 
-            if (prof.VibranceEnabled)
-            {
-                _vibrance.SetLevel(prof.Vibrance);
-            }
-            else
-            {
-                _vibrance.SetLevel(_config.Desktop.Vibrance);
-            }
+            // Pick the profile's monitor first so gamma, black flash (GSI ApplyContrast) and vibrance all land on it
+            string? target = MonitorEngine.ResolveProfileDisplay(prof);
+            _gammaEngine.SetTargetDisplay(target);
+            _vibrance.Apply(prof.VibranceEnabled ? prof.Vibrance : _config.Desktop.Vibrance, target);
 
             if (prof.GammaEnabled || prof.BoostEnabled)
             {
@@ -1040,6 +1054,13 @@ namespace GUI.Forms
                 return;
             }
 
+            // CS2 detected without its profile being applied (no saved profile): only dim the game monitor
+            // (primary unless the profile says otherwise), never the stream / second screen.
+            if (_gammaEngine.TargetDisplay == null)
+            {
+                _gammaEngine.SetTargetDisplay(MonitorEngine.ResolveProfileDisplay(cs2Prof));
+            }
+
             double f = flashed;
             double contrast = (1.0 - f) / (1.0 + f);
 
@@ -1083,7 +1104,7 @@ namespace GUI.Forms
                         {
                             if (prof.VibranceEnabled)
                             {
-                                _vibrance.SetLevel(prof.Vibrance);
+                                _vibrance.Apply(prof.Vibrance, _gammaEngine.TargetDisplay);
                             }
                             if (prof.GammaEnabled || prof.BoostEnabled)
                             {
@@ -1101,11 +1122,41 @@ namespace GUI.Forms
             if (_isCleanedUp) return;
             _currentGameExe = null;
             _currentGamePid = 0;
+            _currentGameProfile = null;
             _gammaEnforceTimer?.Stop();
             _vibrance.Restore();
+            // Reset every LUT first, then drop the target, so the game curve never spreads to all monitors
             _gammaEngine.Restore();
+            _gammaEngine.SetTargetDisplay(null);
             _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
+        }
+
+        // HDMI plugged / unplugged, MUX or Advanced Optimus switch, resolution change...
+        // NVIDIA handles go stale and a newly attached monitor starts with a default LUT, so re-enumerate and re-apply.
+        private void OnDisplayTopologyChanged()
+        {
+            if (this.IsDisposed || _isCleanedUp) return;
+            try
+            {
+                MonitorEngine.InvalidateMonitorCache();
+                _vibrance.RefreshDisplays();
+
+                var prof = _currentGameProfile;
+                if (_currentGameExe != null && prof != null)
+                {
+                    ApplyGameProfile(_currentGameExe, prof);
+                }
+                else
+                {
+                    _vibrance.Restore();
+                    _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.Log($"OnDisplayTopologyChanged failed: {ex.Message}");
+            }
         }
 
         public void RestoreFromTray()
@@ -1186,6 +1237,8 @@ namespace GUI.Forms
                 catch { }
                 try { _saveConfigDebounceTimer?.Stop(); } catch { }
                 try { _saveConfigDebounceTimer?.Dispose(); } catch { }
+                try { _displayChangeTimer?.Stop(); } catch { }
+                try { _displayChangeTimer?.Dispose(); } catch { }
                 try
                 {
                     _pnlResGrid?.Controls.Clear();

@@ -46,6 +46,15 @@ namespace GUI.Config
 
         [JsonPropertyName("cs2_antiflash_max_dim")]
         public int Cs2AntiFlashMaxDim { get; set; } = 100;
+
+        // Monitor this profile's gamma / black flash / vibrance applies to (the one the game is played on).
+        // Stable monitor device path from the DisplayConfig API; empty = primary monitor.
+        [JsonPropertyName("display_device_path")]
+        public string DisplayDevicePath { get; set; } = "";
+
+        // Friendly name of that monitor, used as a fallback match when it is plugged into another port
+        [JsonPropertyName("display_name")]
+        public string DisplayName { get; set; } = "";
     }
 
     public class AppConfig

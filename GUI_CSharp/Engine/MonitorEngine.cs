@@ -16,6 +16,16 @@ namespace GUI.Engine
         public bool IsPrimary { get; set; } = false;
     }
 
+    public class ActiveMonitor
+    {
+        public string GdiName { get; set; } = "";        // "\\.\DISPLAY2" (can change across reboots / replugs)
+        public string DevicePath { get; set; } = "";     // stable per monitor + connector, saved in the profile
+        public string FriendlyName { get; set; } = "";   // EDID name, e.g. "DELL S2721DGF"
+        public string Connection { get; set; } = "";     // HDMI / DisplayPort / Laptop panel ...
+        public string AdapterName { get; set; } = "";    // GPU driving it (iGPU vs NVIDIA on hybrid laptops)
+        public bool IsPrimary { get; set; }
+    }
+
     public static class MonitorEngine
     {
         private static readonly Guid GUID_DEVCLASS_MONITOR = new("4d36e96e-e325-11ce-bfc1-08002be10318");
@@ -112,6 +122,285 @@ namespace GUI.Engine
 
         [DllImport("cfgmgr32.dll", SetLastError = true)]
         private static extern uint CM_Disable_DevNode(uint dnDevInst, uint ulFlags);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct MONITORINFOEXW
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string szDevice;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int X, Y;
+        }
+
+        private const uint MONITOR_DEFAULTTOPRIMARY = 0x00000001;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFOEXW lpmi);
+
+        // --- DisplayConfig API: real monitor names, connector type and a stable device path per monitor ---
+        private const uint QDC_ONLY_ACTIVE_PATHS = 0x00000002;
+        private const uint DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME = 1;
+        private const uint DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME = 2;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LUID
+        {
+            public uint LowPart;
+            public int HighPart;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DISPLAYCONFIG_PATH_SOURCE_INFO
+        {
+            public LUID adapterId;
+            public uint id;
+            public uint modeInfoIdx;
+            public uint statusFlags;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DISPLAYCONFIG_PATH_TARGET_INFO
+        {
+            public LUID adapterId;
+            public uint id;
+            public uint modeInfoIdx;
+            public uint outputTechnology;
+            public uint rotation;
+            public uint scaling;
+            public uint refreshRateNumerator;
+            public uint refreshRateDenominator;
+            public uint scanLineOrdering;
+            public int targetAvailable;
+            public uint statusFlags;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DISPLAYCONFIG_PATH_INFO
+        {
+            public DISPLAYCONFIG_PATH_SOURCE_INFO sourceInfo;
+            public DISPLAYCONFIG_PATH_TARGET_INFO targetInfo;
+            public uint flags;
+        }
+
+        // 64 bytes: header (16) + 48-byte union (target / source / desktop-image mode); contents are not used
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DISPLAYCONFIG_MODE_INFO
+        {
+            public uint infoType;
+            public uint id;
+            public LUID adapterId;
+            public ulong u0, u1, u2, u3, u4, u5;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct DISPLAYCONFIG_DEVICE_INFO_HEADER
+        {
+            public uint type;
+            public uint size;
+            public LUID adapterId;
+            public uint id;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DISPLAYCONFIG_SOURCE_DEVICE_NAME
+        {
+            public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string viewGdiDeviceName;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DISPLAYCONFIG_TARGET_DEVICE_NAME
+        {
+            public DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+            public uint flags;
+            public uint outputTechnology;
+            public ushort edidManufactureId;
+            public ushort edidProductCodeId;
+            public uint connectorInstance;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+            public string monitorFriendlyDeviceName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string monitorDevicePath;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern int GetDisplayConfigBufferSizes(uint flags, out uint numPathArrayElements, out uint numModeInfoArrayElements);
+
+        [DllImport("user32.dll")]
+        private static extern int QueryDisplayConfig(
+            uint flags,
+            ref uint numPathArrayElements,
+            [Out] DISPLAYCONFIG_PATH_INFO[] pathArray,
+            ref uint numModeInfoArrayElements,
+            [Out] DISPLAYCONFIG_MODE_INFO[] modeInfoArray,
+            IntPtr currentTopologyId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DEVICE_NAME requestPacket);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_TARGET_DEVICE_NAME requestPacket);
+
+        // Monitors currently showing the desktop, with what is needed to pick one in a game profile
+        public static List<ActiveMonitor> GetActiveMonitors()
+        {
+            var result = new List<ActiveMonitor>();
+            try
+            {
+                if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out uint numPaths, out uint numModes) != 0) return result;
+                var paths = new DISPLAYCONFIG_PATH_INFO[numPaths];
+                var modes = new DISPLAYCONFIG_MODE_INFO[numModes];
+                if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref numPaths, paths, ref numModes, modes, IntPtr.Zero) != 0) return result;
+
+                var attached = GammaEngine.GetAttachedDisplays();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 0; i < numPaths; i++)
+                {
+                    var p = paths[i];
+
+                    var src = new DISPLAYCONFIG_SOURCE_DEVICE_NAME();
+                    src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                    src.header.size = (uint)Marshal.SizeOf<DISPLAYCONFIG_SOURCE_DEVICE_NAME>();
+                    src.header.adapterId = p.sourceInfo.adapterId;
+                    src.header.id = p.sourceInfo.id;
+                    if (DisplayConfigGetDeviceInfo(ref src) != 0 || string.IsNullOrEmpty(src.viewGdiDeviceName)) continue;
+                    // Clone / duplicate mode: one GDI source drives several monitors; keep the first
+                    if (!seen.Add(src.viewGdiDeviceName)) continue;
+
+                    var tgt = new DISPLAYCONFIG_TARGET_DEVICE_NAME();
+                    tgt.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+                    tgt.header.size = (uint)Marshal.SizeOf<DISPLAYCONFIG_TARGET_DEVICE_NAME>();
+                    tgt.header.adapterId = p.targetInfo.adapterId;
+                    tgt.header.id = p.targetInfo.id;
+                    bool hasTarget = DisplayConfigGetDeviceInfo(ref tgt) == 0;
+
+                    bool isPrimary = false;
+                    string adapter = "";
+                    foreach (var d in attached)
+                    {
+                        if (string.Equals(d.Name, src.viewGdiDeviceName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            isPrimary = d.IsPrimary;
+                            adapter = d.AdapterName;
+                            break;
+                        }
+                    }
+
+                    uint tech = hasTarget ? tgt.outputTechnology : p.targetInfo.outputTechnology;
+                    string friendly = hasTarget ? (tgt.monitorFriendlyDeviceName ?? "") : "";
+                    if (string.IsNullOrWhiteSpace(friendly))
+                    {
+                        friendly = IsInternalConnection(tech) ? "Built-in display" : "Generic monitor";
+                    }
+
+                    result.Add(new ActiveMonitor
+                    {
+                        GdiName = src.viewGdiDeviceName,
+                        DevicePath = hasTarget ? (tgt.monitorDevicePath ?? "") : "",
+                        FriendlyName = friendly,
+                        Connection = DescribeConnection(tech),
+                        AdapterName = adapter,
+                        IsPrimary = isPrimary
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.Log($"MonitorEngine.GetActiveMonitors failed: {ex.Message}");
+            }
+
+            // Primary first, then by GDI index, so the list order is stable
+            result.Sort((a, b) =>
+            {
+                if (a.IsPrimary != b.IsPrimary) return a.IsPrimary ? -1 : 1;
+                return string.Compare(a.GdiName, b.GdiName, StringComparison.OrdinalIgnoreCase);
+            });
+            return result;
+        }
+
+        private static bool IsInternalConnection(uint tech) =>
+            tech == 0x80000000 || tech == 6 || tech == 11 || tech == 13; // INTERNAL, LVDS, eDP, UDI embedded
+
+        private static string DescribeConnection(uint tech) => tech switch
+        {
+            0 => "VGA",
+            4 => "DVI",
+            5 => "HDMI",
+            10 => "DisplayPort",
+            12 => "UDI",
+            15 => "Miracast",
+            16 or 17 => "Virtual",
+            _ when IsInternalConnection(tech) => "Laptop panel",
+            _ => "Other"
+        };
+
+        // GDI device name (e.g. "\\.\DISPLAY2") of the monitor saved in the profile.
+        // Matches the stable device path, then the friendly name (monitor moved to another port), else the primary monitor.
+        public static string? ResolveProfileDisplay(GUI.Config.GameProfile prof)
+        {
+            try
+            {
+                var monitors = GetActiveMonitors();
+                if (!string.IsNullOrEmpty(prof.DisplayDevicePath))
+                {
+                    foreach (var m in monitors)
+                    {
+                        if (string.Equals(m.DevicePath, prof.DisplayDevicePath, StringComparison.OrdinalIgnoreCase)) return m.GdiName;
+                    }
+
+                    ActiveMonitor? byName = null;
+                    int nameMatches = 0;
+                    foreach (var m in monitors)
+                    {
+                        if (!string.IsNullOrEmpty(prof.DisplayName) && string.Equals(m.FriendlyName, prof.DisplayName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            byName = m;
+                            nameMatches++;
+                        }
+                    }
+                    if (nameMatches == 1) return byName!.GdiName;
+
+                    Program.Log($"Profile monitor '{prof.DisplayName}' is not connected -> using primary monitor.");
+                }
+
+                return GetPrimaryDisplayName();
+            }
+            catch
+            {
+                return GetPrimaryDisplayName();
+            }
+        }
+
+        public static string? GetPrimaryDisplayName()
+        {
+            return GetDisplayName(MonitorFromPoint(new POINT { X = 0, Y = 0 }, MONITOR_DEFAULTTOPRIMARY));
+        }
+
+        private static string? GetDisplayName(IntPtr hMonitor)
+        {
+            if (hMonitor == IntPtr.Zero) return null;
+            var mi = new MONITORINFOEXW { cbSize = Marshal.SizeOf<MONITORINFOEXW>() };
+            return GetMonitorInfoW(hMonitor, ref mi) && !string.IsNullOrEmpty(mi.szDevice) ? mi.szDevice : null;
+        }
 
         public static bool IsAdministrator()
         {
