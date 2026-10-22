@@ -18,11 +18,13 @@ namespace GUI.Utils
 
         private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
+        // Full exe path, or "" when it cannot be read with PROCESS_QUERY_LIMITED_INFORMATION.
+        // Never falls back to Process.MainModule: that opens the process with PROCESS_VM_READ, the handle
+        // anti-cheats watch for, and it would fail anyway wherever the limited query is refused.
         public static string GetProcessPath(int pid)
         {
             if (pid <= 0) return "";
 
-            // Method 1: Win32 QueryFullProcessImageName (100% Anti-cheat safe, no Access Denied)
             IntPtr hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
             if (hProcess != IntPtr.Zero)
             {
@@ -41,16 +43,7 @@ namespace GUI.Utils
                 }
             }
 
-            // Method 2: Process.MainModule fallback
-            try
-            {
-                using var proc = Process.GetProcessById(pid);
-                return proc.MainModule?.FileName ?? "";
-            }
-            catch
-            {
-                return "";
-            }
+            return "";
         }
 
         public static string GetProcessExeName(int pid)
