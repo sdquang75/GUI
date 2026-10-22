@@ -134,7 +134,7 @@ namespace GUI.Forms
             LoadConfigToUi();
             InitSingleInstanceListener();
 
-            SystemEvents.SessionEnding += OnSessionEnding;
+            SystemEvents.SessionEnded += OnSessionEnded;
 
             if (_startMinimized)
             {
@@ -717,7 +717,10 @@ namespace GUI.Forms
                         GammaEnabled = existing.GammaEnabled,
                         Gamma = existing.Gamma,
                         BoostEnabled = existing.BoostEnabled,
-                        Boost = existing.Boost
+                        Boost = existing.Boost,
+                        Cs2AntiFlashEnabled = existing.Cs2AntiFlashEnabled,
+                        Cs2AntiSmokeEnabled = existing.Cs2AntiSmokeEnabled,
+                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim
                     };
                 }
                 else
@@ -783,7 +786,10 @@ namespace GUI.Forms
                         GammaEnabled = existing.GammaEnabled,
                         Gamma = existing.Gamma,
                         BoostEnabled = existing.BoostEnabled,
-                        Boost = existing.Boost
+                        Boost = existing.Boost,
+                        Cs2AntiFlashEnabled = existing.Cs2AntiFlashEnabled,
+                        Cs2AntiSmokeEnabled = existing.Cs2AntiSmokeEnabled,
+                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim
                     };
                 }
                 else
@@ -1123,9 +1129,11 @@ namespace GUI.Forms
             }
         }
 
-        private void OnSessionEnding(object sender, SessionEndingEventArgs e)
+        // SessionEnded (WM_ENDSESSION) only fires once logoff/shutdown is final.
+        // SessionEnding (WM_QUERYENDSESSION) can still be cancelled, which would leave a dead app holding the mutex.
+        private void OnSessionEnded(object sender, SessionEndedEventArgs e)
         {
-            Program.Log($"SystemEvents.SessionEnding triggered ({e.Reason})");
+            Program.Log($"SystemEvents.SessionEnded triggered ({e.Reason})");
             CleanupAndRestoreDefaults();
         }
 
@@ -1136,7 +1144,7 @@ namespace GUI.Forms
 
             Program.Log("CleanupAndRestoreDefaults: Resetting all applied machine values to default...");
 
-            try { SystemEvents.SessionEnding -= OnSessionEnding; } catch { }
+            try { SystemEvents.SessionEnded -= OnSessionEnded; } catch { }
             try { _showWindowWaitHandle?.Unregister(null); } catch { }
             try { _showWindowEvent?.Dispose(); } catch { }
 
@@ -1236,6 +1244,14 @@ namespace GUI.Forms
             {
                 e.Cancel = true;
                 this.Hide();
+                return;
+            }
+
+            if (e.CloseReason == CloseReason.WindowsShutDown)
+            {
+                // Raised on WM_QUERYENDSESSION: shutdown may still be cancelled, so keep running.
+                // Cleanup happens in FormClosed / SessionEnded once the session really ends.
+                Program.Log("MainForm.OnFormClosing: WindowsShutDown query, deferring cleanup until session ends");
                 return;
             }
 

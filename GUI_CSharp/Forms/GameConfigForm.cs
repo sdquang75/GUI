@@ -384,7 +384,12 @@ namespace GUI.Forms
         private string? _cachedCs2CfgDir = null;
         private bool _hasCheckedCs2CfgDir = false;
 
-        private void UpdateCs2StatusUi(bool forceRecheckDir = false)
+        // cs2.exe located via the Setup folder picker; only written to ResultProfile on Save
+        private string? _setupCs2ExePath = null;
+
+        private string CurrentProfilePath => _setupCs2ExePath ?? _profile.Path;
+
+        private void UpdateCs2StatusUi()
         {
             if (this.IsDisposed) return;
 
@@ -407,9 +412,9 @@ namespace GUI.Forms
             // Setup / Registry status (cached directory path, zero disk I/O on tick)
             if (_lblSetupStatus != null)
             {
-                if (!_hasCheckedCs2CfgDir || forceRecheckDir)
+                if (!_hasCheckedCs2CfgDir)
                 {
-                    _cachedCs2CfgDir = Utils.Cs2Helper.FindCs2CfgDirectory(_profile.Path);
+                    _cachedCs2CfgDir = Utils.Cs2Helper.FindCs2CfgDirectory(CurrentProfilePath);
                     _hasCheckedCs2CfgDir = true;
                 }
 
@@ -436,7 +441,7 @@ namespace GUI.Forms
 
         private void OnSetupClick()
         {
-            string? cfgDir = Utils.Cs2Helper.FindCs2CfgDirectory(_profile.Path);
+            string? cfgDir = Utils.Cs2Helper.FindCs2CfgDirectory(CurrentProfilePath);
             if (string.IsNullOrEmpty(cfgDir))
             {
                 using var fbd = new FolderBrowserDialog
@@ -447,8 +452,7 @@ namespace GUI.Forms
                 if (fbd.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(fbd.SelectedPath))
                 {
                     string p = fbd.SelectedPath;
-                    _profile.Path = p;
-                    _cachedCs2CfgDir = null;
+                    _setupCs2ExePath = FindCs2ExeNear(p) ?? _setupCs2ExePath;
                     if (Directory.Exists(Path.Combine(p, "csgo", "cfg")))
                     {
                         cfgDir = Path.Combine(p, "csgo", "cfg");
@@ -470,7 +474,9 @@ namespace GUI.Forms
                 return;
             }
 
-            var (cfgSuccess, cfgPath, cfgMsg) = Utils.Cs2Helper.InstallGsiConfig(cfgDir, 23456);
+            // Must match the port the running listener uses (config "cs2_gsi_port")
+            int gsiPort = _gsiListener?.Port ?? 23456;
+            var (cfgSuccess, cfgPath, cfgMsg) = Utils.Cs2Helper.InstallGsiConfig(cfgDir, gsiPort);
             if (!cfgSuccess)
             {
                 MessageBox.Show(this, "Failed to write GSI config: " + cfgMsg, "Setup Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -493,7 +499,9 @@ namespace GUI.Forms
             }
             catch { }
 
-            UpdateCs2StatusUi(forceRecheckDir: true);
+            _cachedCs2CfgDir = cfgDir;
+            _hasCheckedCs2CfgDir = true;
+            UpdateCs2StatusUi();
 
             string regInfo = regUnlocked
                 ? "✓ 0% Pure Black: Unlocked! (Please RESTART your computer once for exclusive fullscreen 0% black to take effect; until then, hardware dimming operates at 50% clamp)."
@@ -511,6 +519,26 @@ namespace GUI.Forms
                 "GUI Anti-Flashbang",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
+        }
+
+        private static string? FindCs2ExeNear(string folder)
+        {
+            try
+            {
+                string[] candidates =
+                {
+                    Path.Combine(folder, "cs2.exe"),
+                    Path.Combine(folder, "bin", "win64", "cs2.exe"),
+                    Path.Combine(folder, "game", "bin", "win64", "cs2.exe"),
+                    Path.Combine(folder, "..", "..", "bin", "win64", "cs2.exe") // folder = game\csgo\cfg
+                };
+                foreach (var c in candidates)
+                {
+                    if (File.Exists(c)) return Path.GetFullPath(c);
+                }
+            }
+            catch { }
+            return null;
         }
 
         private void OnToggleTest()
@@ -582,7 +610,7 @@ namespace GUI.Forms
             ResultProfile = new GameProfile
             {
                 Name = string.IsNullOrEmpty(_profile.Name) ? Path.GetFileNameWithoutExtension(_exeName) : _profile.Name,
-                Path = _profile.Path,
+                Path = CurrentProfilePath,
                 VibranceEnabled = _profile.VibranceEnabled,
                 Vibrance = _tbVibrance.Value,
                 GammaEnabled = _chkGamma.Checked,

@@ -162,18 +162,15 @@ namespace GUI.Engine
 
         public static string? ResolveExecutablePath()
         {
-            // 1. Extract embedded x86_64 resources to %LocalAppData%\GUI\goodbyedpi\x86_64
+            // 1. Extract embedded x86_64 resources (verified against the embedded copy on every launch)
             try
             {
-                string extractDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "GUI", "goodbyedpi", "x86_64");
-                Directory.CreateDirectory(extractDir);
+                string extractDir = GetExtractDirectory();
 
                 string exePath = Path.Combine(extractDir, "goodbyedpi.exe");
-                ExtractResourceIfMissing("GUI.Goodbyedpi.goodbyedpi.exe", exePath);
-                ExtractResourceIfMissing("GUI.Goodbyedpi.WinDivert.dll", Path.Combine(extractDir, "WinDivert.dll"));
-                ExtractResourceIfMissing("GUI.Goodbyedpi.WinDivert64.sys", Path.Combine(extractDir, "WinDivert64.sys"));
+                ExtractResourceIfChanged("GUI.Goodbyedpi.goodbyedpi.exe", exePath);
+                ExtractResourceIfChanged("GUI.Goodbyedpi.WinDivert.dll", Path.Combine(extractDir, "WinDivert.dll"));
+                ExtractResourceIfChanged("GUI.Goodbyedpi.WinDivert64.sys", Path.Combine(extractDir, "WinDivert64.sys"));
 
                 if (File.Exists(exePath))
                 {
@@ -196,13 +193,67 @@ namespace GUI.Engine
             return null;
         }
 
-        private static void ExtractResourceIfMissing(string resourceName, string targetPath)
+        private static string GetExtractDirectory()
         {
-            if (File.Exists(targetPath)) return;
+            // goodbyedpi.exe is always launched elevated. When elevated, extract under Program Files
+            // (admin-only write) so a non-elevated process cannot swap the binaries before launch.
+            if (MonitorEngine.IsAdministrator())
+            {
+                try
+                {
+                    string protectedDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                        "GUI", "goodbyedpi", "x86_64");
+                    Directory.CreateDirectory(protectedDir);
+                    return protectedDir;
+                }
+                catch (Exception ex)
+                {
+                    Program.Log($"GoodbyeDpiEngine: cannot use Program Files extract dir: {ex.Message}");
+                }
+            }
+
+            string userDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "GUI", "goodbyedpi", "x86_64");
+            Directory.CreateDirectory(userDir);
+            return userDir;
+        }
+
+        private static void ExtractResourceIfChanged(string resourceName, string targetPath)
+        {
             using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName);
             if (stream == null) return;
-            using var fs = new FileStream(targetPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-            stream.CopyTo(fs);
+
+            byte[] expected;
+            using (var ms = new MemoryStream())
+            {
+                stream.CopyTo(ms);
+                expected = ms.ToArray();
+            }
+
+            // Re-extract when missing, truncated by an interrupted write, outdated, or tampered with
+            try
+            {
+                if (File.Exists(targetPath) && File.ReadAllBytes(targetPath).AsSpan().SequenceEqual(expected))
+                {
+                    return;
+                }
+            }
+            catch { }
+
+            string tmpPath = targetPath + ".tmp";
+            try
+            {
+                File.WriteAllBytes(tmpPath, expected);
+                File.Move(tmpPath, targetPath, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                // e.g. WinDivert64.sys still loaded by the driver; keep the existing file
+                Program.Log($"GoodbyeDpiEngine: could not update '{Path.GetFileName(targetPath)}': {ex.Message}");
+                try { File.Delete(tmpPath); } catch { }
+            }
         }
 
         public static (bool Success, string Message) SetEnabled(bool enable, string? modeId = null)
