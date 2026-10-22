@@ -5,24 +5,6 @@ namespace GUI.Engine
 {
     public class WindowsDwmEngine : IVibranceEngine
     {
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-        private struct DISPLAY_DEVICE
-        {
-            public int cb;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-            public string DeviceName;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-            public string DeviceString;
-            public int StateFlags;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-            public string DeviceID;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-            public string DeviceKey;
-        }
-
-        [DllImport("user32.dll", CharSet = CharSet.Ansi)]
-        private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
-
         private bool _isDisposed = false;
         private int _currentLevel = 50;
 
@@ -36,32 +18,31 @@ namespace GUI.Engine
             Initialize();
         }
 
+        // Names the engine after the GPU driving the primary monitor (Intel / AMD); anything else is plain "Windows DWM"
         private void DetectGpuName()
         {
-            try
+            string adapter = "";
+            foreach (var d in DisplayTopology.GetDisplays())
             {
-                var dd = new DISPLAY_DEVICE();
-                dd.cb = Marshal.SizeOf(dd);
-                for (uint i = 0; EnumDisplayDevices(null, i, ref dd, 0); i++)
+                if (d.IsPrimary)
                 {
-                    if ((dd.StateFlags & 0x4) != 0 || i == 0) // Primary or first display
-                    {
-                        string str = dd.DeviceString ?? "";
-                        if (str.Contains("Intel", StringComparison.OrdinalIgnoreCase))
-                        {
-                            EngineName = "Intel (DWM)";
-                            return;
-                        }
-                        if (str.Contains("AMD", StringComparison.OrdinalIgnoreCase) || str.Contains("Radeon", StringComparison.OrdinalIgnoreCase))
-                        {
-                            EngineName = "AMD (DWM)";
-                            return;
-                        }
-                    }
+                    adapter = d.AdapterName;
+                    break;
                 }
             }
-            catch { }
-            EngineName = "Windows DWM";
+
+            if (adapter.Contains("Intel", StringComparison.OrdinalIgnoreCase))
+            {
+                EngineName = "Intel (DWM)";
+            }
+            else if (adapter.Contains("AMD", StringComparison.OrdinalIgnoreCase) || adapter.Contains("Radeon", StringComparison.OrdinalIgnoreCase))
+            {
+                EngineName = "AMD (DWM)";
+            }
+            else
+            {
+                EngineName = "Windows DWM";
+            }
         }
 
         private void Initialize()

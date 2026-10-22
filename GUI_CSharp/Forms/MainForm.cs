@@ -960,14 +960,20 @@ namespace GUI.Forms
             }
 
             // Pick the profile's monitor first so gamma, black flash (GSI ApplyContrast) and vibrance all land on it
-            string? target = MonitorEngine.ResolveProfileDisplay(prof);
+            string? target = DisplayTopology.ResolveProfileDisplay(prof);
             _gammaEngine.SetTargetDisplay(target);
             _vibrance.Apply(prof.VibranceEnabled ? prof.Vibrance : _config.Desktop.Vibrance, target);
 
-            if (prof.GammaEnabled || prof.BoostEnabled)
+            double g = prof.GammaEnabled ? prof.Gamma : 2.20;
+            double b = prof.BoostEnabled ? (prof.Boost / 100.0) : 0.0;
+            if (string.Equals(exe, "cs2.exe", StringComparison.OrdinalIgnoreCase))
             {
-                double g = prof.GammaEnabled ? prof.Gamma : 2.20;
-                double b = prof.BoostEnabled ? (prof.Boost / 100.0) : 0.0;
+                // Re-applied mid-flash (focus / display change): keep the black flash dim instead of resetting it
+                // (no flash: contrast is 1.0 and this equals ApplyCurve / Restore)
+                _gammaEngine.ApplyCurveKeepingContrast(g, b);
+            }
+            else if (prof.GammaEnabled || prof.BoostEnabled)
+            {
                 _gammaEngine.ApplyCurve(g, b);
             }
             else
@@ -1058,7 +1064,7 @@ namespace GUI.Forms
             // (primary unless the profile says otherwise), never the stream / second screen.
             if (_gammaEngine.TargetDisplay == null)
             {
-                _gammaEngine.SetTargetDisplay(MonitorEngine.ResolveProfileDisplay(cs2Prof));
+                _gammaEngine.SetTargetDisplay(DisplayTopology.ResolveProfileDisplay(cs2Prof));
             }
 
             double f = flashed;

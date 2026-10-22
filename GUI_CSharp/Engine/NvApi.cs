@@ -188,6 +188,24 @@ namespace GUI.Engine
             }
         }
 
+        // Sets every NVIDIA output except gdiName, so the game monitor never dips to this level before getting its own
+        public bool SetLevelExcept(string gdiName, int level)
+        {
+            lock (_lock)
+            {
+                if (!IsAvailable || _setDvcLevelEx == null) return false;
+                _handlesByName.TryGetValue(gdiName, out var skip);
+                level = Math.Clamp(level, 0, 100);
+                bool success = true;
+                foreach (var h in _displayHandles)
+                {
+                    if (h == skip) continue;
+                    if (!SetHandleLevel(h, level)) success = false;
+                }
+                return success;
+            }
+        }
+
         private bool SetHandleLevel(IntPtr h, int level)
         {
             var info = new NV_DISPLAY_DVC_INFO_EX

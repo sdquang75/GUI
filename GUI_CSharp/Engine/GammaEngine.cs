@@ -29,32 +29,6 @@ namespace GUI.Engine
 
     public unsafe class GammaEngine : IDisposable
     {
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct DISPLAY_DEVICEW
-        {
-            public int cb;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-            public string DeviceName;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-            public string DeviceString;
-            public int StateFlags;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-            public string DeviceID;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-            public string DeviceKey;
-        }
-
-        private const int DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x00000001;
-        private const int DISPLAY_DEVICE_PRIMARY_DEVICE = 0x00000004;
-        private const int DISPLAY_DEVICE_MIRRORING_DRIVER = 0x00000008;
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        private static extern bool EnumDisplayDevicesW(
-            string? lpDevice,
-            uint iDevNum,
-            ref DISPLAY_DEVICEW lpDisplayDevice,
-            uint dwFlags);
-
         [DllImport("user32.dll")]
         private static extern IntPtr GetDC(IntPtr hWnd);
 
@@ -171,12 +145,12 @@ namespace GUI.Engine
             bool anySuccess = primarySuccess;
             try
             {
-                foreach (var target in GetDisplayTargets())
+                foreach (var target in DisplayTopology.GetDisplays())
                 {
                     // Skip primary display if already successfully updated via primaryHdc
                     if (target.IsPrimary && primarySuccess) continue;
 
-                    IntPtr hdc = CreateDC(null, target.Name, null, IntPtr.Zero);
+                    IntPtr hdc = CreateDC(null, target.GdiName, null, IntPtr.Zero);
                     if (hdc != IntPtr.Zero)
                     {
                         try
@@ -205,18 +179,18 @@ namespace GUI.Engine
             string? target = _targetDisplay;
             if (target == null) return SetRampToAllDisplays(pRamp);
 
-            DisplayTarget? match = null;
-            foreach (var t in GetDisplayTargets())
+            DisplayInfo? match = null;
+            foreach (var d in DisplayTopology.GetDisplays())
             {
-                if (string.Equals(t.Name, target, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(d.GdiName, target, StringComparison.OrdinalIgnoreCase))
                 {
-                    match = t;
+                    match = d;
                     break;
                 }
             }
             if (match == null) return SetRampToAllDisplays(pRamp);
 
-            bool isPrimary = match.Value.IsPrimary;
+            bool isPrimary = match.IsPrimary;
             IntPtr hdc = isPrimary ? GetDC(IntPtr.Zero) : CreateDC(null, target, null, IntPtr.Zero);
             if (hdc == IntPtr.Zero) return false;
             try
@@ -233,24 +207,6 @@ namespace GUI.Engine
                 else DeleteDC(hdc);
             }
         }
-
-        public readonly struct DisplayTarget
-        {
-            public DisplayTarget(string name, bool isPrimary, string adapterName)
-            {
-                Name = name;
-                IsPrimary = isPrimary;
-                AdapterName = adapterName;
-            }
-
-            public string Name { get; }
-            public bool IsPrimary { get; }
-            // GPU driving this output (e.g. Intel UHD vs NVIDIA GeForce on a hybrid laptop)
-            public string AdapterName { get; }
-        }
-
-        // Monitors currently attached to the desktop (cached, see GetDisplayTargets)
-        public static IReadOnlyList<DisplayTarget> GetAttachedDisplays() => GetDisplayTargets();
 
         private string? _targetDisplay;
 
@@ -299,75 +255,6 @@ namespace GUI.Engine
                 identity.Blue[i] = val;
             }
             return identity;
-        }
-
-        private sealed class DisplayTargetCache
-        {
-            public DisplayTarget[] Targets = Array.Empty<DisplayTarget>();
-            public long Tick;
-        }
-
-        // EnumDisplayDevicesW over all adapters costs ~0.3 ms; cache it instead of re-running it per ramp write.
-        // Invalidated on WM_DISPLAYCHANGE / monitor enable-disable (MonitorEngine.InvalidateMonitorCache), with a TTL as a safety net.
-        private const long DisplayCacheTtlMs = 10000;
-        private static volatile DisplayTargetCache? _displayCache;
-
-        public static void InvalidateDisplayCache()
-        {
-            _displayCache = null;
-        }
-
-        private static DisplayTarget[] GetDisplayTargets()
-        {
-            long now = Environment.TickCount64;
-            var cache = _displayCache;
-            if (cache != null && now - cache.Tick < DisplayCacheTtlMs)
-            {
-                return cache.Targets;
-            }
-
-            var list = new List<DisplayTarget>();
-            try
-            {
-                for (uint i = 0; ; i++)
-                {
-                    var dev = new DISPLAY_DEVICEW();
-                    dev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
-                    if (!EnumDisplayDevicesW(null, i, ref dev, 0)) break;
-
-                    bool attached = (dev.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0;
-                    bool mirror = (dev.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) != 0;
-                    if (attached && !mirror && !string.IsNullOrEmpty(dev.DeviceName))
-                    {
-                        list.Add(new DisplayTarget(
-                            dev.DeviceName,
-                            (dev.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0,
-                            dev.DeviceString ?? ""));
-                    }
-                }
-            }
-            catch { }
-
-            var targets = list.ToArray();
-            _displayCache = new DisplayTargetCache { Targets = targets, Tick = now };
-            LogTopologyIfChanged(targets);
-            return targets;
-        }
-
-        private static string _lastTopology = "";
-
-        // Logs which GPU drives each attached monitor whenever the layout changes (HDMI plug/unplug, MUX switch...)
-        private static void LogTopologyIfChanged(DisplayTarget[] targets)
-        {
-            var parts = new List<string>(targets.Length);
-            foreach (var t in targets)
-            {
-                parts.Add($"{t.Name}{(t.IsPrimary ? " (primary)" : "")} on {t.AdapterName}");
-            }
-            string topology = string.Join("; ", parts);
-            if (topology == _lastTopology) return;
-            _lastTopology = topology;
-            Program.Log($"Display topology: {(topology.Length > 0 ? topology : "none")}");
         }
 
         public bool ApplyCurve(double gamma = 1.80, double blackBoost = 0.0, double contrast = 1.0)
@@ -509,6 +396,19 @@ namespace GUI.Engine
             }
         }
 
+        // Re-applies gamma / boost but keeps the black flash contrast currently on screen. A profile re-apply in the
+        // middle of a flash (focus or display change) would otherwise reset it to 1.0, and during the flash hold CS2
+        // sends no new packet for up to 1s, so the screen would turn white. Read and written under the same lock as
+        // ApplyContrast, so a flash ending on the GSI thread at that moment is never overwritten by a stale value.
+        public bool ApplyCurveKeepingContrast(double gamma, double blackBoost)
+        {
+            lock (_lock)
+            {
+                if (_isDisposed) return false;
+                return ApplyCurve(gamma, blackBoost, _lastContrast);
+            }
+        }
+
         public bool EnforceIfNeeded()
         {
             lock (_lock)
@@ -565,7 +465,7 @@ namespace GUI.Engine
 
                 // Read back from the monitor the profile targets (the game may run on a non-primary display)
                 string? target = _targetDisplay;
-                bool readTarget = target != null && !string.Equals(target, MonitorEngine.GetPrimaryDisplayName(), StringComparison.OrdinalIgnoreCase);
+                bool readTarget = target != null && !string.Equals(target, DisplayTopology.GetPrimaryName(), StringComparison.OrdinalIgnoreCase);
                 IntPtr hdc = readTarget ? CreateDC(null, target, null, IntPtr.Zero) : GetDC(IntPtr.Zero);
                 if (hdc != IntPtr.Zero)
                 {

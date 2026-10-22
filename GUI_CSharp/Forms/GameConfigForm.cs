@@ -33,6 +33,7 @@ namespace GUI.Forms
         private Label _lblBoostVal;
 
         private ComboBox _cmbDisplayTarget;
+        private Font? _monitorDetailFont;
         private string? _prevTargetDisplay;
 
         private GroupBox? _gbAntiFlash;
@@ -77,6 +78,8 @@ namespace GUI.Forms
             {
                 _statusTimer?.Stop();
                 _statusTimer?.Dispose();
+                _monitorDetailFont?.Dispose();
+                _monitorDetailFont = null;
                 if (_isTesting)
                 {
                     RevertPreview();
@@ -89,7 +92,7 @@ namespace GUI.Forms
         {
             this.Text = _exeName;
             bool isCs2 = string.Equals(_exeName, "cs2.exe", StringComparison.OrdinalIgnoreCase);
-            this.Size = isCs2 ? new Size(360, 562) : new Size(360, 426);
+            this.Size = isCs2 ? new Size(360, 576) : new Size(360, 440);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
@@ -232,16 +235,20 @@ namespace GUI.Forms
             var lblDisplayTarget = new Label
             {
                 Text = "Apply to:",
-                Location = new Point(16, 299),
+                Location = new Point(16, 306),
                 Size = new Size(70, 20)
             };
 
             _cmbDisplayTarget = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                Location = new Point(90, 296),
-                Size = new Size(240, 24)
+                DrawMode = DrawMode.OwnerDrawFixed,
+                ItemHeight = 30,
+                Location = new Point(90, 297),
+                Width = 220,
+                DropDownWidth = 240
             };
+            _cmbDisplayTarget.DrawItem += DrawMonitorItem;
             _cmbDisplayTarget.SelectedIndexChanged += (s, e) =>
             {
                 if (_isTesting) ApplyPreview();
@@ -255,7 +262,7 @@ namespace GUI.Forms
                 _gbAntiFlash = new GroupBox
                 {
                     Text = "CS2 Anti-Flashbang",
-                    Location = new Point(14, 330),
+                    Location = new Point(14, 344),
                     Size = new Size(316, 142),
                     Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
                 };
@@ -341,7 +348,7 @@ namespace GUI.Forms
             }
 
             // Bottom Buttons: Save (left), Test (center), Cancel (right)
-            int btnY = isCs2 ? 480 : 341;
+            int btnY = isCs2 ? 494 : 355;
             _btnSave = new Button
             {
                 Text = "Save",
@@ -595,7 +602,7 @@ namespace GUI.Forms
             if (!_isTesting) return;
 
             var selected = _cmbDisplayTarget.SelectedItem as MonitorItem;
-            string? target = selected != null && selected.Connected ? selected.GdiName : MonitorEngine.GetPrimaryDisplayName();
+            string? target = selected != null && selected.Connected ? selected.GdiName : DisplayTopology.GetPrimaryName();
 
             if (_vibrance is UnifiedVibranceEngine unified)
             {
@@ -644,8 +651,38 @@ namespace GUI.Forms
             public string DevicePath = "";
             public string FriendlyName = "";
             public bool Connected = true;
-            public string Label = "";
-            public override string ToString() => Label;
+            public string Title = "";   // "1. DELL S2721DGF — Primary"
+            public string Detail = "";  // "DisplayPort (NVIDIA DVC)"
+            public override string ToString() => Detail.Length > 0 ? $"{Title} · {Detail}" : Title;
+        }
+
+        // Two lines per monitor (name, then connector + technology) so long names never widen the list past the dialog
+        private void DrawMonitorItem(object? sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0 || _cmbDisplayTarget.Items[e.Index] is not MonitorItem item) return;
+
+            // The closed box (edit portion) stays plain even when focused; only the hovered row in the open list is highlighted
+            bool isEditPortion = (e.State & DrawItemState.ComboBoxEdit) != 0;
+            bool highlighted = !isEditPortion && (e.State & DrawItemState.Selected) != 0;
+            Color back = highlighted ? SystemColors.Highlight : SystemColors.Window;
+            Color fore = highlighted ? SystemColors.HighlightText : SystemColors.WindowText;
+            using (var brush = new SolidBrush(back)) e.Graphics.FillRectangle(brush, e.Bounds);
+
+            var flags = TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter;
+            var area = Rectangle.Inflate(e.Bounds, -4, -1);
+
+            if (item.Detail.Length == 0)
+            {
+                TextRenderer.DrawText(e.Graphics, item.Title, e.Font, area, fore, flags);
+            }
+            else
+            {
+                _monitorDetailFont ??= new Font(e.Font!.FontFamily, 8F, FontStyle.Regular, GraphicsUnit.Point);
+                int half = area.Height / 2;
+                TextRenderer.DrawText(e.Graphics, item.Title, e.Font, new Rectangle(area.X, area.Y, area.Width, half), fore, flags);
+                TextRenderer.DrawText(e.Graphics, item.Detail, _monitorDetailFont, new Rectangle(area.X, area.Y + half, area.Width, area.Height - half),
+                    highlighted ? fore : SystemColors.GrayText, flags);
+            }
         }
 
         // Lists the monitors currently connected, e.g. "1. DELL S2721DGF · DisplayPort (NVIDIA DVC) — Primary".
@@ -653,21 +690,21 @@ namespace GUI.Forms
         private void PopulateMonitorList()
         {
             _cmbDisplayTarget.Items.Clear();
-            var monitors = MonitorEngine.GetActiveMonitors();
             var unified = _vibrance as UnifiedVibranceEngine;
 
             int index = 1;
-            foreach (var m in monitors)
+            foreach (var m in DisplayTopology.GetDisplays())
             {
                 string tech = unified != null
-                    ? unified.DescribeTechnology(m.GdiName, m.AdapterName)
+                    ? unified.DescribeTechnology(m)
                     : UnifiedVibranceEngine.DescribeNonNvidia(m.AdapterName);
                 _cmbDisplayTarget.Items.Add(new MonitorItem
                 {
                     GdiName = m.GdiName,
                     DevicePath = m.DevicePath,
                     FriendlyName = m.FriendlyName,
-                    Label = $"{index}. {m.FriendlyName} · {m.Connection} ({tech}){(m.IsPrimary ? " — Primary" : "")}"
+                    Title = $"{index}. {m.FriendlyName}{(m.IsPrimary ? " — Primary" : "")}",
+                    Detail = $"{m.Connection} ({tech})"
                 });
                 index++;
             }
@@ -710,7 +747,7 @@ namespace GUI.Forms
                         DevicePath = _profile.DisplayDevicePath,
                         FriendlyName = _profile.DisplayName,
                         Connected = false,
-                        Label = $"{name} (not connected)"
+                        Title = $"{name} (not connected)"
                     });
                     selectedIndex = _cmbDisplayTarget.Items.Count - 1;
                 }
@@ -720,12 +757,6 @@ namespace GUI.Forms
             if (selectedIndex < 0 && _cmbDisplayTarget.Items.Count > 0) selectedIndex = 0;
             if (selectedIndex >= 0) _cmbDisplayTarget.SelectedIndex = selectedIndex;
 
-            int widest = _cmbDisplayTarget.Width;
-            foreach (var item in _cmbDisplayTarget.Items)
-            {
-                widest = Math.Max(widest, TextRenderer.MeasureText(item.ToString(), _cmbDisplayTarget.Font).Width + 24);
-            }
-            _cmbDisplayTarget.DropDownWidth = widest;
         }
 
         private void OnSave()

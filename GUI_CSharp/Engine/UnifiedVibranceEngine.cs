@@ -2,9 +2,8 @@ using System;
 
 namespace GUI.Engine
 {
-    // Routes vibrance per monitor between NVIDIA DVC (outputs wired to the NVIDIA GPU) and the DWM shader
-    // (desktop-wide, for Intel / AMD outputs). On a hybrid laptop the internal panel usually runs on the iGPU
-    // while HDMI is wired to the dGPU, so both engines may be needed and the topology can change at runtime.
+    // Vibrance through NVIDIA DVC when the NVIDIA driver controls the chosen monitor, otherwise through the DWM shader
+    // (desktop-wide: Intel / AMD, or NVAPI missing). Same engine choice as 1.1.3, applied per monitor.
     public class UnifiedVibranceEngine : IVibranceEngine
     {
         private const int NeutralLevel = 50;
@@ -13,11 +12,12 @@ namespace GUI.Engine
         private WindowsDwmEngine? _dwm;
         private readonly object _lock = new();
         private bool _isDisposed = false;
+        private bool _usingDwm;
         private int _desktopLevel = NeutralLevel;
         private int _lastLevel = NeutralLevel;
 
         public bool IsAvailable => _nvApi.IsAvailable || (GetDwm()?.IsAvailable ?? false);
-        public string EngineName { get; private set; } = "Windows DWM";
+        public string EngineName => _usingDwm ? (_dwm?.EngineName ?? "Windows DWM") : _nvApi.EngineName;
         public int DesktopLevel
         {
             get => _desktopLevel;
@@ -34,8 +34,9 @@ namespace GUI.Engine
         public UnifiedVibranceEngine()
         {
             _nvApi = new NvApiEngine();
-            UpdateEngineName();
-            Program.Log($"UnifiedVibranceEngine: {EngineName} (NVIDIA outputs: {_nvApi.DisplayCount})");
+            _usingDwm = !_nvApi.IsAvailable;
+            if (_usingDwm) GetDwm();
+            Program.Log($"UnifiedVibranceEngine: Active engine -> {EngineName} (NVIDIA outputs: {_nvApi.DisplayCount})");
         }
 
         // Created lazily so NVIDIA-only machines never initialize the Magnification API
@@ -53,9 +54,7 @@ namespace GUI.Engine
         {
             lock (_lock)
             {
-                if (_isDisposed) return;
-                _nvApi.RefreshDisplays();
-                UpdateEngineName();
+                if (!_isDisposed) _nvApi.RefreshDisplays();
             }
         }
 
@@ -65,7 +64,8 @@ namespace GUI.Engine
 
         public void Restore() => Apply(_desktopLevel, null);
 
-        // Applies `level` to targetDisplay (GDI name, null = every monitor); other monitors keep the desktop level.
+        // Applies `level` to targetDisplay (GDI name, null = every monitor). With NVIDIA DVC the other NVIDIA monitors
+        // keep the desktop level; the DWM shader cannot target one monitor, so it covers the whole desktop.
         public bool Apply(int level, string? targetDisplay)
         {
             lock (_lock)
@@ -74,44 +74,16 @@ namespace GUI.Engine
                 level = Math.Clamp(level, 0, 100);
                 _lastLevel = level;
 
-                var displays = GammaEngine.GetAttachedDisplays();
-                bool nvAvailable = _nvApi.IsAvailable;
-                bool hasNonNvidia = false;
-                bool targetAttached = false;
-                foreach (var d in displays)
-                {
-                    if (!IsNvidiaOutput(d)) hasNonNvidia = true;
-                    if (targetDisplay != null && string.Equals(d.Name, targetDisplay, StringComparison.OrdinalIgnoreCase)) targetAttached = true;
-                }
-                if (!targetAttached) targetDisplay = null;
+                string? target = FindAttached(targetDisplay);
+                bool useDvc = _nvApi.IsAvailable && (target == null || IsDvcOutput(target));
 
                 bool ok;
-                if (!nvAvailable)
+                if (useDvc)
                 {
-                    // Intel / AMD only (or HDMI wired to the iGPU): DWM is desktop-wide, no per-monitor routing possible
-                    ok = SetDwm(level);
-                }
-                else if (targetDisplay == null)
-                {
-                    if (!hasNonNvidia)
+                    if (target != null && _nvApi.HasDisplayNames)
                     {
-                        ok = _nvApi.SetLevel(level);
-                        SetDwm(NeutralLevel);
-                    }
-                    else
-                    {
-                        // Hybrid: DWM covers every screen, so keep DVC neutral to avoid double saturation on NVIDIA outputs
-                        _nvApi.SetLevel(NeutralLevel);
-                        ok = SetDwm(level);
-                    }
-                }
-                else if (IsNvidiaOutput(targetDisplay))
-                {
-                    if (_nvApi.HasDisplayNames)
-                    {
-                        // Other NVIDIA outputs keep the desktop level; iGPU screens stay neutral while gaming
-                        _nvApi.SetLevel(hasNonNvidia ? NeutralLevel : _desktopLevel);
-                        ok = _nvApi.SetLevelFor(targetDisplay, level);
+                        if (_nvApi.DisplayCount > 1) _nvApi.SetLevelExcept(target, _desktopLevel);
+                        ok = _nvApi.SetLevelFor(target, level);
                     }
                     else
                     {
@@ -121,40 +93,49 @@ namespace GUI.Engine
                 }
                 else
                 {
-                    // Game on an iGPU screen of a hybrid laptop: DWM (desktop-wide), DVC neutral to avoid double saturation
-                    _nvApi.SetLevel(NeutralLevel);
+                    if (_nvApi.IsAvailable) _nvApi.SetLevel(_desktopLevel);
                     ok = SetDwm(level);
                 }
 
-                UpdateEngineName();
+                _usingDwm = !useDvc;
                 return ok;
             }
         }
 
-        private bool IsNvidiaOutput(GammaEngine.DisplayTarget d)
+        // The requested monitor's GDI name if it is still attached, else null (= every monitor)
+        private static string? FindAttached(string? gdiName)
         {
-            if (!_nvApi.IsAvailable) return false;
-            if (_nvApi.HasDisplayNames) return _nvApi.OwnsDisplay(d.Name);
-            return d.AdapterName.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase);
+            if (gdiName == null) return null;
+            foreach (var d in DisplayTopology.GetDisplays())
+            {
+                if (string.Equals(d.GdiName, gdiName, StringComparison.OrdinalIgnoreCase)) return d.GdiName;
+            }
+            return null;
         }
 
-        private bool IsNvidiaOutput(string displayName)
+        private bool IsDvcOutput(string gdiName)
         {
-            foreach (var d in GammaEngine.GetAttachedDisplays())
+            if (!_nvApi.IsAvailable) return false;
+            if (_nvApi.HasDisplayNames) return _nvApi.OwnsDisplay(gdiName);
+
+            // NVAPI could not name its outputs: go by the GPU that drives the monitor
+            foreach (var d in DisplayTopology.GetDisplays())
             {
-                if (string.Equals(d.Name, displayName, StringComparison.OrdinalIgnoreCase)) return IsNvidiaOutput(d);
+                if (string.Equals(d.GdiName, gdiName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return d.AdapterName.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase);
+                }
             }
             return false;
         }
 
         // Short label of how colors are applied on that monitor, shown next to it in the profile's monitor list
-        public string DescribeTechnology(string gdiName, string adapterName)
+        public string DescribeTechnology(DisplayInfo display)
         {
             lock (_lock)
             {
-                if (IsNvidiaOutput(gdiName)) return "NVIDIA DVC";
+                return IsDvcOutput(display.GdiName) ? "NVIDIA DVC" : DescribeNonNvidia(display.AdapterName);
             }
-            return DescribeNonNvidia(adapterName);
         }
 
         public static string DescribeNonNvidia(string adapterName)
@@ -162,7 +143,7 @@ namespace GUI.Engine
             if (adapterName.Contains("Intel", StringComparison.OrdinalIgnoreCase)) return "Intel · DWM";
             if (adapterName.Contains("AMD", StringComparison.OrdinalIgnoreCase) ||
                 adapterName.Contains("Radeon", StringComparison.OrdinalIgnoreCase)) return "AMD · DWM";
-            if (adapterName.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)) return "NVIDIA";
+            if (adapterName.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)) return "NVIDIA · DWM";
             return "DWM";
         }
 
@@ -172,19 +153,6 @@ namespace GUI.Engine
             if (level == NeutralLevel && !DwmShaderColorEngine.IsVibranceActive) return true;
             var dwm = GetDwm();
             return dwm != null && dwm.SetLevel(level);
-        }
-
-        private void UpdateEngineName()
-        {
-            bool dwmInUse = DwmShaderColorEngine.IsVibranceActive;
-            if (_nvApi.IsAvailable)
-            {
-                EngineName = dwmInUse ? "Hybrid (NVIDIA + DWM)" : _nvApi.EngineName;
-            }
-            else
-            {
-                EngineName = GetDwm()?.EngineName ?? "Windows DWM";
-            }
         }
 
         public void ResetToDefault()

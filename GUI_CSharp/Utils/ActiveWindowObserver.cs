@@ -63,6 +63,15 @@ namespace GUI.Utils
         private int _lastProcessId;
         private readonly object _lock = new object();
 
+        // The hook (UI thread) and delayed re-checks (thread pool) sample the foreground concurrently.
+        // Samples are numbered so an older one never overwrites a newer one, and delivery always announces
+        // the newest recorded app, so listeners never see A after B when B came last.
+        private long _sampleSeq;
+        private long _recordedSeq;
+        private readonly object _notifyLock = new object();
+        private string? _deliveredExe;
+        private int _deliveredPid;
+
         public event Action<string?, int>? ForegroundAppChanged;
 
         public bool IsRunning => _foregroundHook != IntPtr.Zero;
@@ -164,6 +173,7 @@ namespace GUI.Utils
         private void CheckForegroundWindow(IntPtr hwnd, bool forceNotify = false)
         {
             if (!IsRunning) return;
+            long seq = Interlocked.Increment(ref _sampleSeq);
 
             if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
             {
@@ -207,26 +217,49 @@ namespace GUI.Utils
             }
 
             bool shouldNotify = false;
-            string? notifyExe = null;
-            int notifyPid = 0;
 
             lock (_lock)
             {
                 if (!IsRunning) return;
+                // Another thread already recorded a newer sample: this one describes a past foreground window
+                if (seq < _recordedSeq) return;
+                _recordedSeq = seq;
                 _lastHwnd = hwnd;
                 if (forceNotify || pid != _lastProcessId || !string.Equals(exeName, _lastProcessExe, StringComparison.OrdinalIgnoreCase))
                 {
                     _lastProcessExe = exeName;
                     _lastProcessId = pid;
-                    notifyExe = exeName;
-                    notifyPid = pid;
                     shouldNotify = true;
                 }
             }
 
             if (shouldNotify)
             {
-                ForegroundAppChanged?.Invoke(notifyExe, notifyPid);
+                DeliverLatest(forceNotify);
+            }
+        }
+
+        // Outside _lock (listeners do real work), but serialized and always with the newest recorded app.
+        // Listeners must not block on the UI thread here (MainForm only BeginInvokes).
+        private void DeliverLatest(bool force)
+        {
+            lock (_notifyLock)
+            {
+                string? exe;
+                int pid;
+                lock (_lock)
+                {
+                    if (!IsRunning) return;
+                    exe = _lastProcessExe;
+                    pid = _lastProcessId;
+                }
+
+                // A later sample already announced this app (or a newer one replaced it before we got here)
+                if (!force && pid == _deliveredPid && string.Equals(exe, _deliveredExe, StringComparison.OrdinalIgnoreCase)) return;
+
+                _deliveredExe = exe;
+                _deliveredPid = pid;
+                ForegroundAppChanged?.Invoke(exe, pid);
             }
         }
 
@@ -255,11 +288,17 @@ namespace GUI.Utils
             }
             catch { }
             _hookDelegate = null;
-            lock (_lock)
+            lock (_notifyLock)
             {
-                _lastHwnd = IntPtr.Zero;
-                _lastProcessExe = null;
-                _lastProcessId = 0;
+                lock (_lock)
+                {
+                    _lastHwnd = IntPtr.Zero;
+                    _lastProcessExe = null;
+                    _lastProcessId = 0;
+                }
+                // A restart must announce the current app again
+                _deliveredExe = null;
+                _deliveredPid = 0;
             }
         }
 
