@@ -19,6 +19,9 @@ namespace GUI.Engine
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
         private static extern IntPtr LoadLibrary(string lpFileName);
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool FreeLibrary(IntPtr hModule);
+
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
         private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
 
@@ -286,6 +289,11 @@ namespace GUI.Engine
         {
             if (_isDisposed) return;
             ResetToDefault();
+            if (_hNvApi != IntPtr.Zero)
+            {
+                FreeLibrary(_hNvApi);
+                _hNvApi = IntPtr.Zero;
+            }
             _isDisposed = true;
         }
     }

@@ -191,7 +191,7 @@ $@"""GUI Anti-Flashbang CS2 GSI""
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
                 using var proc = Process.Start(psi);
-                proc?.WaitForExit();
+                proc?.WaitForExit(10000);
                 bool unlocked = IsGdiIcmGammaRangeUnlocked();
                 return (unlocked, unlocked ? "Registry unlocked successfully" : "Registry was not modified");
             }

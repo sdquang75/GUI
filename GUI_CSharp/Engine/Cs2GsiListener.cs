@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 
 namespace GUI.Engine
@@ -12,11 +13,14 @@ namespace GUI.Engine
         private HttpListener? _listener;
         private CancellationTokenSource? _cts;
         private Task? _listenTask;
+        private Task? _processorTask;
+        private Channel<HttpListenerContext>? _requestChannel;
         private bool _isDisposed = false;
         private bool _hasLoggedFirstConnection = false;
 
         private readonly System.Threading.Timer _watchdogTimer;
         private DateTime _lastPacketTime = DateTime.MinValue;
+        private DateTime _lastFlashUpdateTime = DateTime.MinValue;
         private double _lastFlashed = 0.0;
         private double _lastSmoked = 0.0;
 
@@ -46,12 +50,19 @@ namespace GUI.Engine
             try
             {
                 _cts = new CancellationTokenSource();
+                _requestChannel = Channel.CreateUnbounded<HttpListenerContext>(new UnboundedChannelOptions
+                {
+                    SingleWriter = true,
+                    SingleReader = true
+                });
+
                 _listener = new HttpListener();
                 _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
                 _listener.Start();
 
                 Program.Log($"Cs2GsiListener: Listening on http://127.0.0.1:{Port}/");
                 _listenTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+                _processorTask = Task.Run(() => ProcessQueueAsync(_cts.Token));
             }
             catch (Exception ex)
             {
@@ -66,7 +77,14 @@ namespace GUI.Engine
                 try
                 {
                     var context = await _listener.GetContextAsync().ConfigureAwait(false);
-                    ThreadPool.QueueUserWorkItem(_ => ProcessRequest(context));
+                    if (_requestChannel != null)
+                    {
+                        _requestChannel.Writer.TryWrite(context);
+                    }
+                    else
+                    {
+                        ProcessRequest(context);
+                    }
                 }
                 catch (HttpListenerException) when (token.IsCancellationRequested)
                 {
@@ -80,6 +98,28 @@ namespace GUI.Engine
                 {
                     Program.Log($"Cs2GsiListener ListenLoop error: {ex.Message}");
                 }
+            }
+        }
+
+        private async Task ProcessQueueAsync(CancellationToken token)
+        {
+            if (_requestChannel == null) return;
+            var reader = _requestChannel.Reader;
+
+            try
+            {
+                while (!token.IsCancellationRequested && await reader.WaitToReadAsync(token).ConfigureAwait(false))
+                {
+                    while (reader.TryRead(out var context))
+                    {
+                        ProcessRequest(context);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Program.Log($"Cs2GsiListener ProcessQueue error: {ex.Message}");
             }
         }
 
@@ -114,6 +154,12 @@ namespace GUI.Engine
 
         private void ParseAndDispatch(JsonElement root)
         {
+            bool shouldNotify = false;
+            double notifyFlashed = 0.0;
+            double notifySmoked = 0.0;
+            bool notifyActive = true;
+            string? notifyRawFlashed = null;
+
             lock (_syncLock)
             {
                 try
@@ -222,27 +268,46 @@ namespace GUI.Engine
 
                     _lastFlashed = effectiveFlashed;
                     _lastSmoked = effectiveSmoked;
+                    _lastFlashUpdateTime = DateTime.UtcNow;
 
-                    StateUpdated?.Invoke(effectiveFlashed, effectiveSmoked, isActive, rawFlashed);
+                    notifyFlashed = effectiveFlashed;
+                    notifySmoked = effectiveSmoked;
+                    notifyActive = isActive;
+                    notifyRawFlashed = rawFlashed;
+                    shouldNotify = true;
+                }
+                catch (JsonException) { }
+                catch (Exception ex)
+                {
+                    Program.Log($"Cs2GsiListener Parse error: {ex.Message}");
+                }
             }
-            catch (JsonException) { }
-            catch (Exception ex)
+
+            if (shouldNotify)
             {
-                Program.Log($"Cs2GsiListener Parse error: {ex.Message}");
-            }
+                StateUpdated?.Invoke(notifyFlashed, notifySmoked, notifyActive, notifyRawFlashed);
             }
         }
 
         private void OnWatchdogTick(object? state)
         {
-            if (_lastFlashed > 0.001 || _lastSmoked > 0.001)
+            bool needReset = false;
+            lock (_syncLock)
             {
-                if ((DateTime.UtcNow - _lastPacketTime).TotalSeconds > 2.0)
+                if (_lastFlashed > 0.001 || _lastSmoked > 0.001)
                 {
-                    _lastFlashed = 0.0;
-                    _lastSmoked = 0.0;
-                    StateUpdated?.Invoke(0.0, 0.0, false, null);
+                    if ((DateTime.UtcNow - _lastFlashUpdateTime).TotalSeconds > 2.0)
+                    {
+                        _lastFlashed = 0.0;
+                        _lastSmoked = 0.0;
+                        needReset = true;
+                    }
                 }
+            }
+
+            if (needReset)
+            {
+                StateUpdated?.Invoke(0.0, 0.0, false, null);
             }
         }
 
@@ -251,6 +316,7 @@ namespace GUI.Engine
             try
             {
                 _cts?.Cancel();
+                _requestChannel?.Writer.TryComplete();
                 _listener?.Stop();
                 _listener?.Close();
             }
@@ -258,6 +324,7 @@ namespace GUI.Engine
             finally
             {
                 _listener = null;
+                _requestChannel = null;
             }
         }
 

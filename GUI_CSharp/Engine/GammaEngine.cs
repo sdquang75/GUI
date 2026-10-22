@@ -243,10 +243,13 @@ namespace GUI.Engine
                 // In that case, directly route to DWM Compositor Shader Engine.
                 if (MonitorEngine.HasAnyDisabledMonitors())
                 {
-                    Program.Log($"GammaEngine.ApplyCurve: Disabled monitor detected -> applying via DwmShaderColorEngine (DWM Pixel Shader).");
-                    ResetHardwareLutOnly();
-                    _switchedToDwmDueToDisabledMonitor = true;
-                    ActiveMode = GammaPipelineMode.DwmCompositor;
+                    if (!_switchedToDwmDueToDisabledMonitor || ActiveMode != GammaPipelineMode.DwmCompositor)
+                    {
+                        Program.Log($"GammaEngine.ApplyCurve: Disabled monitor detected -> applying via DwmShaderColorEngine (DWM Pixel Shader).");
+                        ResetHardwareLutOnly();
+                        _switchedToDwmDueToDisabledMonitor = true;
+                        ActiveMode = GammaPipelineMode.DwmCompositor;
+                    }
                     return DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
                 }
 

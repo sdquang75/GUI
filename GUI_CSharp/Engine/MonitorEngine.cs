@@ -194,7 +194,10 @@ namespace GUI.Engine
             }
 
             // Determine primary monitor
-            var primaryMonitorIds = new List<string>();
+            const uint EDD_GET_DEVICE_INTERFACE_NAME = 0x00000001;
+            var primaryMonitorInterfaceIds = new List<string>();
+            var primaryMonitorPnpIds = new List<string>();
+
             try
             {
                 for (uint i = 0; ; i++)
@@ -208,13 +211,25 @@ namespace GUI.Engine
                     {
                         for (uint j = 0; ; j++)
                         {
-                            var monDev = new DISPLAY_DEVICEW();
-                            monDev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
-                            if (!EnumDisplayDevicesW(adapterDev.DeviceName, j, ref monDev, 0)) break;
-
-                            if (!string.IsNullOrEmpty(monDev.DeviceID))
+                            // 1. Query with EDD_GET_DEVICE_INTERFACE_NAME to get unique hardware UID interface path
+                            var monDevIface = new DISPLAY_DEVICEW();
+                            monDevIface.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
+                            if (EnumDisplayDevicesW(adapterDev.DeviceName, j, ref monDevIface, EDD_GET_DEVICE_INTERFACE_NAME))
                             {
-                                primaryMonitorIds.Add(monDev.DeviceID);
+                                if (!string.IsNullOrEmpty(monDevIface.DeviceID))
+                                {
+                                    primaryMonitorInterfaceIds.Add(monDevIface.DeviceID);
+                                }
+                            }
+
+                            // 2. Query standard device ID as fallback
+                            var monDevStd = new DISPLAY_DEVICEW();
+                            monDevStd.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
+                            if (!EnumDisplayDevicesW(adapterDev.DeviceName, j, ref monDevStd, 0)) break;
+
+                            if (!string.IsNullOrEmpty(monDevStd.DeviceID))
+                            {
+                                primaryMonitorPnpIds.Add(monDevStd.DeviceID);
                             }
                         }
                     }
@@ -229,22 +244,43 @@ namespace GUI.Engine
             else if (list.Count > 1)
             {
                 bool foundPrimary = false;
+
+                // Priority 1: Exact unique matching using interface path (perfectly resolves dual identical monitors)
                 foreach (var m in list)
                 {
-                    foreach (var pId in primaryMonitorIds)
+                    string normalizedInstance = m.InstanceId.Replace('\\', '#');
+                    foreach (var ifaceId in primaryMonitorInterfaceIds)
                     {
-                        var parts = pId.Split('\\');
-                        if (parts.Length > 1 && !string.IsNullOrEmpty(parts[1]))
+                        if (ifaceId.IndexOf(normalizedInstance, StringComparison.OrdinalIgnoreCase) >= 0)
                         {
-                            if (m.InstanceId.IndexOf(parts[1], StringComparison.OrdinalIgnoreCase) >= 0)
-                            {
-                                m.IsPrimary = true;
-                                foundPrimary = true;
-                                break;
-                            }
+                            m.IsPrimary = true;
+                            foundPrimary = true;
+                            break;
                         }
                     }
                     if (foundPrimary) break;
+                }
+
+                // Priority 2: Fallback to PNP model ID matching
+                if (!foundPrimary)
+                {
+                    foreach (var m in list)
+                    {
+                        foreach (var pId in primaryMonitorPnpIds)
+                        {
+                            var parts = pId.Split('\\');
+                            if (parts.Length > 1 && !string.IsNullOrEmpty(parts[1]))
+                            {
+                                if (m.InstanceId.IndexOf(parts[1], StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    m.IsPrimary = true;
+                                    foundPrimary = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (foundPrimary) break;
+                    }
                 }
 
                 if (!foundPrimary && list.Count > 0)

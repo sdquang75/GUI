@@ -12,6 +12,7 @@ namespace GUI.Forms
         private Button _btnDisableSelected;
         private Button _btnEnableSelected;
         private Button _btnRefresh;
+        private Font? _boldFont;
 
         public MonitorsForm()
         {
@@ -120,7 +121,7 @@ namespace GUI.Forms
                 return;
             }
 
-            _btnDisableSelected.Enabled = m.Enabled;
+            _btnDisableSelected.Enabled = m.Enabled && !m.IsPrimary;
             _btnEnableSelected.Enabled = !m.Enabled;
         }
 
@@ -143,7 +144,8 @@ namespace GUI.Forms
                 }
                 else if (m.IsPrimary)
                 {
-                    item.Font = new Font(_lvMonitors.Font, FontStyle.Bold);
+                    _boldFont ??= new Font(_lvMonitors.Font, FontStyle.Bold);
+                    item.Font = _boldFont;
                 }
                 _lvMonitors.Items.Add(item);
             }
@@ -166,6 +168,12 @@ namespace GUI.Forms
             if (m.Enabled == enable)
             {
                 MessageBox.Show(this, $"Monitor is already {(enable ? "enabled" : "disabled")}.", "Notice", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (!enable && m.IsPrimary)
+            {
+                MessageBox.Show(this, "The primary display cannot be disabled.", "Action Not Allowed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -196,6 +204,16 @@ namespace GUI.Forms
                 }
                 RefreshMonitors();
             }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _boldFont?.Dispose();
+                _boldFont = null;
+            }
+            base.Dispose(disposing);
         }
     }
 }

@@ -701,8 +701,15 @@ namespace GUI.Engine
             {
                 try
                 {
-                    p.Kill();
-                    p.WaitForExit(3000);
+                    if (!p.HasExited)
+                    {
+                        p.Kill();
+                        p.WaitForExit(3000);
+                    }
+                }
+                catch
+                {
+                    // Process may have already exited or access denied
                 }
                 finally
                 {

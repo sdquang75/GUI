@@ -65,6 +65,7 @@ namespace GUI.Utils
             try
             {
                 using var proc = Process.GetProcessById(pid);
+                if (string.IsNullOrWhiteSpace(proc.ProcessName)) return "";
                 return (proc.ProcessName + ".exe").ToLowerInvariant();
             }
             catch

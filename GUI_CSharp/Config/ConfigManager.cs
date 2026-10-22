@@ -116,6 +116,7 @@ namespace GUI.Config
                     });
                     if (cfg != null)
                     {
+                        cfg.Desktop ??= new DesktopConfig();
                         cfg.Games = cfg.Games;
                         return cfg;
                     }
@@ -145,10 +146,13 @@ namespace GUI.Config
                     Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
                 };
                 string json = JsonSerializer.Serialize(cfg, opts);
-                File.WriteAllText(path, json);
+                string tmpPath = path + ".tmp";
+                File.WriteAllText(tmpPath, json);
+                File.Move(tmpPath, path, overwrite: true);
             }
             catch (Exception ex)
             {
+                Program.Log($"Failed to save config: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"Failed to save config: {ex.Message}");
             }
         }

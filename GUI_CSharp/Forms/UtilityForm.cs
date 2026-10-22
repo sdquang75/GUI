@@ -195,7 +195,7 @@ namespace GUI.Forms
             _lblDescription.Text = $"{preset.Description}\n• Runs silently in background and stops automatically on GUI exit.";
         }
 
-        private void OnModeChanged()
+        private async void OnModeChanged()
         {
             if (_suppressModeChange) return;
 
@@ -206,14 +206,21 @@ namespace GUI.Forms
 
             if (GoodbyeDpiEngine.IsRunning())
             {
+                _cmbMode.Enabled = false;
+                _btnToggleDpi.Enabled = false;
                 _lblFeedback.Text = $"Switching to {preset.ShortLabel}...";
                 _lblFeedback.ForeColor = Color.FromArgb(71, 85, 105);
-                Application.DoEvents();
 
-                var (ok, msg) = GoodbyeDpiEngine.SwitchModeIfRunning(preset.Id);
-                _lblFeedback.Text = msg;
-                _lblFeedback.ForeColor = ok ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
-                UpdateToggleUi();
+                var (ok, msg) = await Task.Run(() => GoodbyeDpiEngine.SwitchModeIfRunning(preset.Id));
+
+                if (!this.IsDisposed)
+                {
+                    _cmbMode.Enabled = true;
+                    _btnToggleDpi.Enabled = true;
+                    _lblFeedback.Text = msg;
+                    _lblFeedback.ForeColor = ok ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
+                    UpdateToggleUi();
+                }
             }
             else
             {
@@ -223,7 +230,7 @@ namespace GUI.Forms
             }
         }
 
-        private void OnToggleGoodbyeDpi()
+        private async void OnToggleGoodbyeDpi()
         {
             bool currentlyRunning = GoodbyeDpiEngine.IsRunning();
             bool targetState = !currentlyRunning;
@@ -235,20 +242,24 @@ namespace GUI.Forms
                 ? $"Starting GoodbyeDPI ({preset.ShortLabel})..."
                 : "Stopping GoodbyeDPI...";
             _lblFeedback.ForeColor = Color.FromArgb(71, 85, 105);
-            Application.DoEvents();
 
-            var (ok, msg) = GoodbyeDpiEngine.SetEnabled(targetState, preset.Id);
-            _btnToggleDpi.Enabled = true;
-            _cmbMode.Enabled = true;
+            var (ok, msg) = await Task.Run(() => GoodbyeDpiEngine.SetEnabled(targetState, preset.Id));
 
-            _lblFeedback.Text = msg;
-            _lblFeedback.ForeColor = ok ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
+            if (!this.IsDisposed)
+            {
+                _btnToggleDpi.Enabled = true;
+                _cmbMode.Enabled = true;
 
-            UpdateToggleUi();
+                _lblFeedback.Text = msg;
+                _lblFeedback.ForeColor = ok ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
+
+                UpdateToggleUi();
+            }
         }
 
         private void UpdateToggleUi()
         {
+            if (this.IsDisposed) return;
             bool running = GoodbyeDpiEngine.IsRunning();
             if (running)
             {

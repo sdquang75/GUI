@@ -125,10 +125,11 @@ namespace GUI.Utils
         private static Bitmap? RenderHIconToBitmap(IntPtr hIcon, int size)
         {
             if (hIcon == IntPtr.Zero) return null;
+            Bitmap? bmp = null;
             try
             {
                 using var icon = Icon.FromHandle(hIcon);
-                var bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                bmp = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
                 using (var g = Graphics.FromImage(bmp))
                 {
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -164,8 +165,13 @@ namespace GUI.Utils
                 }
 
                 bmp.Dispose();
+                bmp = null;
             }
-            catch { }
+            catch
+            {
+                bmp?.Dispose();
+                bmp = null;
+            }
             return null;
         }
 

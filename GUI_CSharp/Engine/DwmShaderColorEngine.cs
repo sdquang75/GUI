@@ -4,10 +4,9 @@ using System.Runtime.InteropServices;
 namespace GUI.Engine
 {
     [StructLayout(LayoutKind.Sequential)]
-    public struct MAGCOLOREFFECT
+    public unsafe struct MAGCOLOREFFECT
     {
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 25)]
-        public float[] transform;
+        public fixed float transform[25];
     }
 
     public static class DwmShaderColorEngine
@@ -113,7 +112,7 @@ namespace GUI.Engine
             }
         }
 
-        private static bool UpdateEffectInternal()
+        private static unsafe bool UpdateEffectInternal()
         {
             if (!EnsureInitialized()) return false;
 
@@ -122,17 +121,12 @@ namespace GUI.Engine
                 // If neither is active, apply standard identity matrix
                 if (!IsGammaBoostActive && !IsVibranceActive)
                 {
-                    var identity = new MAGCOLOREFFECT
-                    {
-                        transform = new float[25]
-                        {
-                            1f, 0f, 0f, 0f, 0f,
-                            0f, 1f, 0f, 0f, 0f,
-                            0f, 0f, 1f, 0f, 0f,
-                            0f, 0f, 0f, 1f, 0f,
-                            0f, 0f, 0f, 0f, 1f
-                        }
-                    };
+                    var identity = new MAGCOLOREFFECT();
+                    identity.transform[0] = 1f;
+                    identity.transform[6] = 1f;
+                    identity.transform[12] = 1f;
+                    identity.transform[18] = 1f;
+                    identity.transform[24] = 1f;
                     return MagSetFullscreenColorEffect(ref identity);
                 }
 
@@ -173,17 +167,25 @@ namespace GUI.Engine
                 float gL = invS * lg;
                 float bL = invS * lb;
 
-                var effect = new MAGCOLOREFFECT
-                {
-                    transform = new float[25]
-                    {
-                        (rL + s) * totalScale, rL * totalScale,        rL * totalScale,        0f, 0f,
-                        gL * totalScale,        (gL + s) * totalScale, gL * totalScale,        0f, 0f,
-                        bL * totalScale,        bL * totalScale,        (bL + s) * totalScale, 0f, 0f,
-                        0f,                     0f,                     0f,                     1f, 0f,
-                        totalOffset,            totalOffset,            totalOffset,            0f, 1f
-                    }
-                };
+                var effect = new MAGCOLOREFFECT();
+                effect.transform[0] = (rL + s) * totalScale;
+                effect.transform[1] = rL * totalScale;
+                effect.transform[2] = rL * totalScale;
+
+                effect.transform[5] = gL * totalScale;
+                effect.transform[6] = (gL + s) * totalScale;
+                effect.transform[7] = gL * totalScale;
+
+                effect.transform[10] = bL * totalScale;
+                effect.transform[11] = bL * totalScale;
+                effect.transform[12] = (bL + s) * totalScale;
+
+                effect.transform[18] = 1f;
+
+                effect.transform[20] = totalOffset;
+                effect.transform[21] = totalOffset;
+                effect.transform[22] = totalOffset;
+                effect.transform[24] = 1f;
 
                 return MagSetFullscreenColorEffect(ref effect);
             }

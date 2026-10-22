@@ -57,6 +57,7 @@ namespace GUI.Utils
         private IntPtr _foregroundHook = IntPtr.Zero;
         private IntPtr _minimizeEndHook = IntPtr.Zero;
         private WinEventDelegate? _hookDelegate;
+        private CancellationTokenSource? _delayedCts;
         private IntPtr _lastHwnd = IntPtr.Zero;
         private string? _lastProcessExe;
         private int _lastProcessId;
@@ -69,6 +70,8 @@ namespace GUI.Utils
         public void Start()
         {
             if (IsRunning) return;
+
+            _delayedCts = new CancellationTokenSource();
 
             // Retain strong reference to prevent GC collection of the delegate!
             _hookDelegate = new WinEventDelegate(OnWinEvent);
@@ -140,8 +143,12 @@ namespace GUI.Utils
 
         private void ScheduleDelayedForegroundCheck(int delayMs)
         {
-            Task.Delay(delayMs).ContinueWith(_ =>
+            var cts = _delayedCts;
+            if (cts == null || cts.IsCancellationRequested || !IsRunning) return;
+
+            Task.Delay(delayMs, cts.Token).ContinueWith(t =>
             {
+                if (t.IsCanceled || !IsRunning) return;
                 try
                 {
                     IntPtr fg = GetForegroundWindow();
@@ -151,11 +158,13 @@ namespace GUI.Utils
                     }
                 }
                 catch { }
-            });
+            }, TaskContinuationOptions.OnlyOnRanToCompletion);
         }
 
         private void CheckForegroundWindow(IntPtr hwnd, bool forceNotify = false)
         {
+            if (!IsRunning) return;
+
             if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
             {
                 hwnd = GetForegroundWindow();
@@ -172,6 +181,7 @@ namespace GUI.Utils
 
             lock (_lock)
             {
+                if (!IsRunning) return;
                 if (!forceNotify && hwnd != IntPtr.Zero && hwnd == _lastHwnd)
                 {
                     return;
@@ -196,20 +206,40 @@ namespace GUI.Utils
                 }
             }
 
+            bool shouldNotify = false;
+            string? notifyExe = null;
+            int notifyPid = 0;
+
             lock (_lock)
             {
+                if (!IsRunning) return;
                 _lastHwnd = hwnd;
                 if (forceNotify || pid != _lastProcessId || !string.Equals(exeName, _lastProcessExe, StringComparison.OrdinalIgnoreCase))
                 {
                     _lastProcessExe = exeName;
                     _lastProcessId = pid;
-                    ForegroundAppChanged?.Invoke(exeName, pid);
+                    notifyExe = exeName;
+                    notifyPid = pid;
+                    shouldNotify = true;
                 }
+            }
+
+            if (shouldNotify)
+            {
+                ForegroundAppChanged?.Invoke(notifyExe, notifyPid);
             }
         }
 
         public void Stop()
         {
+            try
+            {
+                _delayedCts?.Cancel();
+                _delayedCts?.Dispose();
+                _delayedCts = null;
+            }
+            catch { }
+
             try
             {
                 if (_foregroundHook != IntPtr.Zero)

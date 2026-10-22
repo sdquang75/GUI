@@ -120,12 +120,19 @@ namespace GUI.Forms
             bool hasReverted = false;
             this.FormClosing += (s, e) =>
             {
-                _timer.Stop();
-                _timer.Dispose();
+                try { _timer.Stop(); } catch { }
+                try { _timer.Dispose(); } catch { }
                 if (!KeptDisabled && !hasReverted)
                 {
                     hasReverted = true;
-                    _revertAction?.Invoke();
+                    try
+                    {
+                        _revertAction?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        Program.Log($"MonitorGuardForm revert action failed: {ex.Message}");
+                    }
                 }
             };
         }

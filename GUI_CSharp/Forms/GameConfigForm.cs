@@ -447,6 +447,8 @@ namespace GUI.Forms
                 if (fbd.ShowDialog(this) == DialogResult.OK && !string.IsNullOrEmpty(fbd.SelectedPath))
                 {
                     string p = fbd.SelectedPath;
+                    _profile.Path = p;
+                    _cachedCs2CfgDir = null;
                     if (Directory.Exists(Path.Combine(p, "csgo", "cfg")))
                     {
                         cfgDir = Path.Combine(p, "csgo", "cfg");
@@ -581,7 +583,7 @@ namespace GUI.Forms
             {
                 Name = string.IsNullOrEmpty(_profile.Name) ? Path.GetFileNameWithoutExtension(_exeName) : _profile.Name,
                 Path = _profile.Path,
-                VibranceEnabled = true,
+                VibranceEnabled = _profile.VibranceEnabled,
                 Vibrance = _tbVibrance.Value,
                 GammaEnabled = _chkGamma.Checked,
                 Gamma = Math.Round(_tbGamma.Value / 100.0, 2),

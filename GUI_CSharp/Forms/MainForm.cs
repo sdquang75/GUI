@@ -50,6 +50,8 @@ namespace GUI.Forms
         private Label _lblObserverStatus;
         private NotifyIcon _notifyIcon;
         private System.Windows.Forms.Timer? _gammaEnforceTimer;
+        private System.Windows.Forms.Timer? _saveConfigDebounceTimer;
+        private readonly object _gamesLock = new();
         private string? _currentGameExe = null;
         private int _currentGamePid = 0;
         private bool _isExplicitExit = false;
@@ -82,6 +84,13 @@ namespace GUI.Forms
             DisplayEngine.CaptureInitialResolution();
             _gammaEngine.ResetToIdentity();
 
+            _saveConfigDebounceTimer = new System.Windows.Forms.Timer { Interval = 400 };
+            _saveConfigDebounceTimer.Tick += (s, e) =>
+            {
+                _saveConfigDebounceTimer.Stop();
+                ConfigManager.Save(_config);
+            };
+
             _gammaEnforceTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _gammaEnforceTimer.Tick += (s, e) =>
             {
@@ -93,7 +102,8 @@ namespace GUI.Forms
                         try
                         {
                             using var proc = Process.GetProcessById(_currentGamePid);
-                            isRunning = !proc.HasExited;
+                            string expectedName = Path.GetFileNameWithoutExtension(_currentGameExe);
+                            isRunning = !proc.HasExited && string.Equals(proc.ProcessName, expectedName, StringComparison.OrdinalIgnoreCase);
                         }
                         catch
                         {
@@ -224,12 +234,18 @@ namespace GUI.Forms
                 _lblDesktopVibVal.Text = $"{val} %";
                 _config.Desktop.Vibrance = val;
                 _vibrance.DesktopLevel = val;
-                ConfigManager.Save(_config);
+                _saveConfigDebounceTimer?.Stop();
+                _saveConfigDebounceTimer?.Start();
 
                 if (_currentGameExe == null)
                 {
                     _vibrance.SetLevel(val);
                 }
+            };
+            _tbDesktopVib.MouseUp += (s, e) =>
+            {
+                _saveConfigDebounceTimer?.Stop();
+                ConfigManager.Save(_config);
             };
 
             gbWinVib.Controls.Add(_tbDesktopVib);
@@ -615,7 +631,13 @@ namespace GUI.Forms
 
                 var items = new List<ListViewItem>();
                 int index = 0;
-                foreach (var kvp in _config.Games)
+                List<KeyValuePair<string, GameProfile>> gamesSnapshot;
+                lock (_gamesLock)
+                {
+                    gamesSnapshot = new List<KeyValuePair<string, GameProfile>>(_config.Games);
+                }
+
+                foreach (var kvp in gamesSnapshot)
                 {
                     string exeKey = kvp.Key.ToLowerInvariant();
                     var prof = kvp.Value;
@@ -678,7 +700,13 @@ namespace GUI.Forms
             {
                 string exe = dlg.SelectedExe.ToLowerInvariant();
                 GameProfile initialProfile;
-                if (_config.Games.TryGetValue(exe, out var existing))
+                GameProfile? existing = null;
+                lock (_gamesLock)
+                {
+                    _config.Games.TryGetValue(exe, out existing);
+                }
+
+                if (existing != null)
                 {
                     initialProfile = new GameProfile
                     {
@@ -710,13 +738,16 @@ namespace GUI.Forms
                 using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine, _gsiListener);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
                 {
-                    _config.Games[exe] = configDlg.ResultProfile;
+                    lock (_gamesLock)
+                    {
+                        _config.Games[exe] = configDlg.ResultProfile;
+                    }
                     ConfigManager.Save(_config);
                     RefreshGameTiles(exe);
 
                     if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
                     {
-                        ApplyGameProfile(exe, _config.Games[exe]);
+                        ApplyGameProfile(exe, configDlg.ResultProfile);
                     }
                 }
             }
@@ -735,7 +766,13 @@ namespace GUI.Forms
             {
                 string exe = Path.GetFileName(ofd.FileName).ToLowerInvariant();
                 GameProfile initialProfile;
-                if (_config.Games.TryGetValue(exe, out var existing))
+                GameProfile? existing = null;
+                lock (_gamesLock)
+                {
+                    _config.Games.TryGetValue(exe, out existing);
+                }
+
+                if (existing != null)
                 {
                     initialProfile = new GameProfile
                     {
@@ -767,13 +804,16 @@ namespace GUI.Forms
                 using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine, _gsiListener);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
                 {
-                    _config.Games[exe] = configDlg.ResultProfile;
+                    lock (_gamesLock)
+                    {
+                        _config.Games[exe] = configDlg.ResultProfile;
+                    }
                     ConfigManager.Save(_config);
                     RefreshGameTiles(exe);
 
                     if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
                     {
-                        ApplyGameProfile(exe, _config.Games[exe]);
+                        ApplyGameProfile(exe, configDlg.ResultProfile);
                     }
                 }
             }
@@ -784,18 +824,30 @@ namespace GUI.Forms
             if (_lvGames.SelectedItems.Count > 0)
             {
                 string? exe = _lvGames.SelectedItems[0].Tag as string;
-                if (!string.IsNullOrEmpty(exe) && _config.Games.TryGetValue(exe, out var prof))
+                GameProfile? prof = null;
+                if (!string.IsNullOrEmpty(exe))
+                {
+                    lock (_gamesLock)
+                    {
+                        _config.Games.TryGetValue(exe, out prof);
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(exe) && prof != null)
                 {
                     using var configDlg = new GameConfigForm(exe, prof, _vibrance, _gammaEngine, _gsiListener);
                     if (configDlg.ShowDialog(this) == DialogResult.OK)
                     {
-                        _config.Games[exe] = configDlg.ResultProfile;
+                        lock (_gamesLock)
+                        {
+                            _config.Games[exe] = configDlg.ResultProfile;
+                        }
                         ConfigManager.Save(_config);
                         RefreshGameTiles(exe);
 
                         if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
                         {
-                            ApplyGameProfile(exe, _config.Games[exe]);
+                            ApplyGameProfile(exe, configDlg.ResultProfile);
                         }
                     }
                 }
@@ -807,15 +859,27 @@ namespace GUI.Forms
             if (_lvGames.SelectedItems.Count > 0)
             {
                 string? exe = _lvGames.SelectedItems[0].Tag as string;
-                if (!string.IsNullOrEmpty(exe) && _config.Games.ContainsKey(exe))
+                if (!string.IsNullOrEmpty(exe))
                 {
-                    _config.Games.Remove(exe);
-                    ConfigManager.Save(_config);
-                    RefreshGameTiles();
-
-                    if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
+                    bool removed = false;
+                    lock (_gamesLock)
                     {
-                        ResetToDesktop();
+                        if (_config.Games.ContainsKey(exe))
+                        {
+                            _config.Games.Remove(exe);
+                            removed = true;
+                        }
+                    }
+
+                    if (removed)
+                    {
+                        ConfigManager.Save(_config);
+                        RefreshGameTiles();
+
+                        if (string.Equals(_currentGameExe, exe, StringComparison.OrdinalIgnoreCase))
+                        {
+                            ResetToDesktop();
+                        }
                     }
                 }
             }
@@ -840,9 +904,12 @@ namespace GUI.Forms
                     GameProfile? matchedProf = null;
                     if (!string.IsNullOrEmpty(exeName))
                     {
-                        if (_config.Games.TryGetValue(exeName, out matchedProf))
+                        lock (_gamesLock)
                         {
-                            matchedExe = exeName;
+                            if (_config.Games.TryGetValue(exeName, out matchedProf))
+                            {
+                                matchedExe = exeName;
+                            }
                         }
                     }
 
@@ -949,9 +1016,13 @@ namespace GUI.Forms
                 return;
             }
 
-            if (!_config.Games.TryGetValue("cs2.exe", out var cs2Prof))
+            GameProfile? cs2Prof;
+            lock (_gamesLock)
             {
-                cs2Prof = new GameProfile { Cs2AntiFlashEnabled = true, Cs2AntiFlashMaxDim = 100 };
+                if (!_config.Games.TryGetValue("cs2.exe", out cs2Prof))
+                {
+                    cs2Prof = new GameProfile { Cs2AntiFlashEnabled = true, Cs2AntiFlashMaxDim = 100 };
+                }
             }
 
             if (!cs2Prof.Cs2AntiFlashEnabled)
@@ -1093,6 +1164,14 @@ namespace GUI.Forms
                         try { img.Dispose(); } catch { }
                     }
                     _currentTileIcons.Clear();
+                }
+                catch { }
+                try { _saveConfigDebounceTimer?.Stop(); } catch { }
+                try { _saveConfigDebounceTimer?.Dispose(); } catch { }
+                try
+                {
+                    _pnlResGrid?.Controls.Clear();
+                    _resButtons.Clear();
                 }
                 catch { }
                 try { _resBtnFontRegular?.Dispose(); } catch { }

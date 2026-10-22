@@ -82,7 +82,7 @@ namespace GUI.Forms
         private void PopulateProcesses()
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string[] ignored = { "explorer.exe", "svchost.exe", "gui.exe", "conhost.exe", "taskhostw.exe", "cmd.exe", "powershell.exe", "idle.exe", "system" };
+            string[] ignored = { "explorer.exe", "svchost.exe", "gui.exe", "conhost.exe", "taskhostw.exe", "cmd.exe", "powershell.exe", "idle.exe", "system.exe" };
 
             var procs = Process.GetProcesses();
             try
