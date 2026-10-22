@@ -89,6 +89,16 @@ namespace GUI.Engine
         private double _cachedCurveGamma = -1.0;
         private double _cachedCurveBoost = -1.0;
 
+        // Smaller than one GSI flashed step (1/255), so every real change is still applied
+        private const double ContrastEpsilon = 0.001;
+        private bool _lastApplyOk = true;
+
+        // Highest contrast GDI rejected for the current base curve (GdiIcmGammaRange not unlocked).
+        // Lower values go straight to the 0.50 clamp instead of failing (with retries) on every GSI packet.
+        private const long RejectedContrastMemoMs = 30000;
+        private double _rejectedContrastCeiling = -1.0;
+        private long _rejectedContrastTick = 0;
+
         public bool IsCustomActive { get; private set; }
         public GammaPipelineMode ActiveMode { get; private set; } = GammaPipelineMode.HardwareLut;
         public double CurrentGamma => _lastGamma;
@@ -119,6 +129,7 @@ namespace GUI.Engine
 
             _cachedCurveGamma = gamma;
             _cachedCurveBoost = blackBoost;
+            _rejectedContrastCeiling = -1.0;
         }
 
         private const int SM_CMONITORS = 80;
@@ -160,35 +171,24 @@ namespace GUI.Engine
             bool anySuccess = primarySuccess;
             try
             {
-                for (uint i = 0; ; i++)
+                foreach (var target in GetDisplayTargets())
                 {
-                    var dev = new DISPLAY_DEVICEW();
-                    dev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
-                    if (!EnumDisplayDevicesW(null, i, ref dev, 0)) break;
-
-                    bool attached = (dev.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0;
-                    bool mirror = (dev.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) != 0;
-                    bool isPrimary = (dev.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
-
                     // Skip primary display if already successfully updated via primaryHdc
-                    if (isPrimary && primarySuccess) continue;
+                    if (target.IsPrimary && primarySuccess) continue;
 
-                    if (attached && !mirror && !string.IsNullOrEmpty(dev.DeviceName))
+                    IntPtr hdc = CreateDC(null, target.Name, null, IntPtr.Zero);
+                    if (hdc != IntPtr.Zero)
                     {
-                        IntPtr hdc = CreateDC(null, dev.DeviceName, null, IntPtr.Zero);
-                        if (hdc != IntPtr.Zero)
+                        try
                         {
-                            try
+                            if (SetDeviceGammaRamp(hdc, pRamp))
                             {
-                                if (SetDeviceGammaRamp(hdc, pRamp))
-                                {
-                                    anySuccess = true;
-                                }
+                                anySuccess = true;
                             }
-                            finally
-                            {
-                                DeleteDC(hdc);
-                            }
+                        }
+                        finally
+                        {
+                            DeleteDC(hdc);
                         }
                     }
                 }
@@ -198,7 +198,78 @@ namespace GUI.Engine
             return anySuccess;
         }
 
+        private readonly struct DisplayTarget
+        {
+            public DisplayTarget(string name, bool isPrimary)
+            {
+                Name = name;
+                IsPrimary = isPrimary;
+            }
+
+            public string Name { get; }
+            public bool IsPrimary { get; }
+        }
+
+        private sealed class DisplayTargetCache
+        {
+            public DisplayTarget[] Targets = Array.Empty<DisplayTarget>();
+            public long Tick;
+        }
+
+        // EnumDisplayDevicesW over all adapters costs ~0.3 ms; cache it instead of re-running it per ramp write.
+        // Invalidated on WM_DISPLAYCHANGE / monitor enable-disable (MonitorEngine.InvalidateMonitorCache), with a TTL as a safety net.
+        private const long DisplayCacheTtlMs = 10000;
+        private static volatile DisplayTargetCache? _displayCache;
+
+        public static void InvalidateDisplayCache()
+        {
+            _displayCache = null;
+        }
+
+        private static DisplayTarget[] GetDisplayTargets()
+        {
+            long now = Environment.TickCount64;
+            var cache = _displayCache;
+            if (cache != null && now - cache.Tick < DisplayCacheTtlMs)
+            {
+                return cache.Targets;
+            }
+
+            var list = new List<DisplayTarget>();
+            try
+            {
+                for (uint i = 0; ; i++)
+                {
+                    var dev = new DISPLAY_DEVICEW();
+                    dev.cb = Marshal.SizeOf<DISPLAY_DEVICEW>();
+                    if (!EnumDisplayDevicesW(null, i, ref dev, 0)) break;
+
+                    bool attached = (dev.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0;
+                    bool mirror = (dev.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) != 0;
+                    if (attached && !mirror && !string.IsNullOrEmpty(dev.DeviceName))
+                    {
+                        list.Add(new DisplayTarget(dev.DeviceName, (dev.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0));
+                    }
+                }
+            }
+            catch { }
+
+            var targets = list.ToArray();
+            _displayCache = new DisplayTargetCache { Targets = targets, Tick = now };
+            return targets;
+        }
+
         public bool ApplyCurve(double gamma = 1.80, double blackBoost = 0.0, double contrast = 1.0)
+        {
+            lock (_lock)
+            {
+                bool ok = ApplyCurveCore(gamma, blackBoost, contrast);
+                _lastApplyOk = ok;
+                return ok;
+            }
+        }
+
+        private bool ApplyCurveCore(double gamma, double blackBoost, double contrast)
         {
             lock (_lock)
             {
@@ -253,8 +324,14 @@ namespace GUI.Engine
                     return DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
                 }
 
-                // Normal path: Attempt hardware LUT on all active displays
-                bool success = SetRampToAllDisplays(&newRamp);
+                // Normal path: Attempt hardware LUT on all active displays.
+                // Skip the direct attempt when GDI recently rejected this (or a brighter) contrast for the same curve.
+                long nowTick = Environment.TickCount64;
+                bool knownRejected = _lastContrast < 0.50
+                    && _lastContrast <= _rejectedContrastCeiling
+                    && nowTick - _rejectedContrastTick < RejectedContrastMemoMs;
+
+                bool success = !knownRejected && SetRampToAllDisplays(&newRamp);
                 if (!success && _lastContrast < 0.50)
                 {
                     // Fallback: If 0-contrast was rejected by Windows GDI (GdiIcmGammaRange not yet set),
@@ -273,6 +350,12 @@ namespace GUI.Engine
                     if (success)
                     {
                         _lastAppliedRamp = fallbackRamp;
+                        if (!knownRejected)
+                        {
+                            // HW LUT works, only this low contrast was out of GDI's allowed range
+                            _rejectedContrastCeiling = Math.Max(_rejectedContrastCeiling, _lastContrast);
+                            _rejectedContrastTick = nowTick;
+                        }
                     }
                 }
 
@@ -280,7 +363,7 @@ namespace GUI.Engine
                 {
                     _switchedToDwmDueToDisabledMonitor = false;
                     ActiveMode = GammaPipelineMode.HardwareLut;
-                    DwmShaderColorEngine.ResetGammaAndBoost();
+                    ResetDwmGammaIfActive();
                     return true;
                 }
 
@@ -298,7 +381,21 @@ namespace GUI.Engine
 
         public bool ApplyContrast(double contrast)
         {
-            return ApplyCurve(_lastGamma, _lastBlackBoost, contrast);
+            lock (_lock)
+            {
+                if (_isDisposed) return false;
+
+                // CS2 GSI sends a packet on every player_state change (money, health...) plus a 1s heartbeat.
+                // Re-writing an identical ramp each time only adds driver work, so skip unchanged contrast.
+                // External LUT overrides are still corrected by EnforceIfNeeded.
+                double c = Math.Clamp(contrast, 0.0, 1.0);
+                if (_lastApplyOk && Math.Abs(c - _lastContrast) < ContrastEpsilon)
+                {
+                    return true;
+                }
+
+                return ApplyCurve(_lastGamma, _lastBlackBoost, c);
+            }
         }
 
         public bool EnforceIfNeeded()
@@ -418,6 +515,17 @@ namespace GUI.Engine
                 ActiveMode = GammaPipelineMode.HardwareLut;
 
                 ResetHardwareLutOnly();
+                ResetDwmGammaIfActive();
+                _lastApplyOk = true;
+            }
+        }
+
+        // Only touch the Magnification API when a DWM gamma effect is actually applied; otherwise this would
+        // initialize it (even on NVIDIA / HW-LUT machines) and send an extra DWM call on every GSI packet.
+        private static void ResetDwmGammaIfActive()
+        {
+            if (DwmShaderColorEngine.IsGammaBoostActive)
+            {
                 DwmShaderColorEngine.ResetGammaAndBoost();
             }
         }
@@ -470,6 +578,7 @@ namespace GUI.Engine
                     _lastContrast = state.Contrast > 0 ? state.Contrast : 1.0;
                     ActiveMode = state.Mode;
                     IsCustomActive = true;
+                    _lastApplyOk = true;
                     if (ActiveMode == GammaPipelineMode.DwmCompositor || MonitorEngine.HasAnyDisabledMonitors())
                     {
                         ActiveMode = GammaPipelineMode.DwmCompositor;
@@ -509,6 +618,7 @@ namespace GUI.Engine
                 {
                     _lastAppliedRamp = ramp;
                     IsCustomActive = true;
+                    _lastApplyOk = true;
                     if (ActiveMode == GammaPipelineMode.DwmCompositor || MonitorEngine.HasAnyDisabledMonitors())
                     {
                         ActiveMode = GammaPipelineMode.DwmCompositor;

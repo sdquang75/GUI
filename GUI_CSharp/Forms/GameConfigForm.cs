@@ -611,7 +611,8 @@ namespace GUI.Forms
             {
                 Name = string.IsNullOrEmpty(_profile.Name) ? Path.GetFileNameWithoutExtension(_exeName) : _profile.Name,
                 Path = CurrentProfilePath,
-                VibranceEnabled = _profile.VibranceEnabled,
+                // No UI toggle exists for this, so the in-game Vibrance slider must always take effect
+                VibranceEnabled = true,
                 Vibrance = _tbVibrance.Value,
                 GammaEnabled = _chkGamma.Checked,
                 Gamma = Math.Round(_tbGamma.Value / 100.0, 2),

@@ -1174,6 +1174,16 @@ namespace GUI.Forms
                     _currentTileIcons.Clear();
                 }
                 catch { }
+                try
+                {
+                    // Flush a debounced Desktop Vibrance change that has not been written yet
+                    if (_saveConfigDebounceTimer != null && _saveConfigDebounceTimer.Enabled)
+                    {
+                        _saveConfigDebounceTimer.Stop();
+                        ConfigManager.Save(_config);
+                    }
+                }
+                catch { }
                 try { _saveConfigDebounceTimer?.Stop(); } catch { }
                 try { _saveConfigDebounceTimer?.Dispose(); } catch { }
                 try

@@ -63,8 +63,12 @@ namespace GUI.Engine
             catch { }
         }
 
+        private bool _isDisposed = false;
+
         public void Dispose()
         {
+            if (_isDisposed) return;
+            _isDisposed = true;
             try
             {
                 _activeEngine.ResetToDefault();

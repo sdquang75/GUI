@@ -19,9 +19,6 @@ namespace GUI.Engine
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
         private static extern IntPtr LoadLibrary(string lpFileName);
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool FreeLibrary(IntPtr hModule);
-
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
         private static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
 
@@ -203,7 +200,7 @@ namespace GUI.Engine
 
         public int GetLevel()
         {
-            if (!IsAvailable || _getDvcInfoEx == null || _displayHandles.Count == 0)
+            if (_isDisposed || !IsAvailable || _getDvcInfoEx == null || _displayHandles.Count == 0)
                 return DesktopLevel;
 
             var info = new NV_DISPLAY_DVC_INFO_EX
@@ -262,7 +259,7 @@ namespace GUI.Engine
 
         public void ResetToDefault()
         {
-            if (!IsAvailable || _setDvcLevelEx == null || _displayHandles.Count == 0)
+            if (_isDisposed || !IsAvailable || _setDvcLevelEx == null || _displayHandles.Count == 0)
                 return;
 
             foreach (var h in _displayHandles)
@@ -289,12 +286,11 @@ namespace GUI.Engine
         {
             if (_isDisposed) return;
             ResetToDefault();
-            if (_hNvApi != IntPtr.Zero)
-            {
-                FreeLibrary(_hNvApi);
-                _hNvApi = IntPtr.Zero;
-            }
             _isDisposed = true;
+            IsAvailable = false;
+            // nvapi64.dll is intentionally NOT freed: it is loaded once per process, NVAPI may still own
+            // worker threads (no NvAPI_Unload here), and the cached function pointers would dangle.
+            // The OS releases the module when the process exits.
         }
     }
 }

@@ -302,6 +302,7 @@ namespace GUI.Engine
             {
                 _lastDisabledCheckTick = 0;
             }
+            GammaEngine.InvalidateDisplayCache();
         }
 
         public static bool HasAnyDisabledMonitors()

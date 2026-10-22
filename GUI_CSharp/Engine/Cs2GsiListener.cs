@@ -77,13 +77,14 @@ namespace GUI.Engine
                 try
                 {
                     var context = await _listener.GetContextAsync().ConfigureAwait(false);
-                    if (_requestChannel != null)
+                    var channel = _requestChannel;
+                    if (channel != null)
                     {
-                        _requestChannel.Writer.TryWrite(context);
+                        channel.Writer.TryWrite(context);
                     }
-                    else
+                    else if (ProcessRequest(context, out var state))
                     {
-                        ProcessRequest(context);
+                        Dispatch(state);
                     }
                 }
                 catch (HttpListenerException) when (token.IsCancellationRequested)
@@ -110,9 +111,23 @@ namespace GUI.Engine
             {
                 while (!token.IsCancellationRequested && await reader.WaitToReadAsync(token).ConfigureAwait(false))
                 {
+                    // Coalesce: answer every queued packet, but only push the newest player state to the GPU.
+                    // If a ramp write stalls (driver waiting for vblank), older flash values are skipped instead
+                    // of being replayed late, so the screen always follows the current flash state.
+                    bool hasState = false;
+                    GsiState latest = default;
                     while (reader.TryRead(out var context))
                     {
-                        ProcessRequest(context);
+                        if (ProcessRequest(context, out var state))
+                        {
+                            latest = state;
+                            hasState = true;
+                        }
+                    }
+
+                    if (hasState)
+                    {
+                        Dispatch(latest);
                     }
                 }
             }
@@ -123,15 +138,26 @@ namespace GUI.Engine
             }
         }
 
-        private void ProcessRequest(HttpListenerContext context)
+        private readonly record struct GsiState(double Flashed, double Smoked, bool IsActive, string? RawFlashed);
+
+        private void Dispatch(GsiState state)
         {
+            StateUpdated?.Invoke(state.Flashed, state.Smoked, state.IsActive, state.RawFlashed);
+        }
+
+        // Parses the packet and replies 200 immediately (before any GPU work), so CS2 is never held up by a ramp write.
+        // Returns true when the packet carried player state.
+        private bool ProcessRequest(HttpListenerContext context, out GsiState state)
+        {
+            state = default;
+            bool hasState = false;
             try
             {
                 if (context.Request.HttpMethod == "POST")
                 {
                     using (var doc = JsonDocument.Parse(context.Request.InputStream))
                     {
-                        ParseAndDispatch(doc.RootElement);
+                        hasState = TryParseState(doc.RootElement, out state);
                     }
                 }
 
@@ -148,12 +174,14 @@ namespace GUI.Engine
                 catch { }
                 Program.Log($"Cs2GsiListener.ProcessRequest error: {ex.Message}");
             }
+            return hasState;
         }
 
         private readonly object _syncLock = new object();
 
-        private void ParseAndDispatch(JsonElement root)
+        private bool TryParseState(JsonElement root, out GsiState state)
         {
+            state = default;
             bool shouldNotify = false;
             double notifyFlashed = 0.0;
             double notifySmoked = 0.0;
@@ -184,7 +212,7 @@ namespace GUI.Engine
                     if (!root.TryGetProperty("player", out var playerElem) ||
                         !playerElem.TryGetProperty("state", out var stateElem))
                     {
-                        return;
+                        return false;
                     }
 
                     string? playerSteamId = null;
@@ -285,8 +313,9 @@ namespace GUI.Engine
 
             if (shouldNotify)
             {
-                StateUpdated?.Invoke(notifyFlashed, notifySmoked, notifyActive, notifyRawFlashed);
+                state = new GsiState(notifyFlashed, notifySmoked, notifyActive, notifyRawFlashed);
             }
+            return shouldNotify;
         }
 
         private void OnWatchdogTick(object? state)
