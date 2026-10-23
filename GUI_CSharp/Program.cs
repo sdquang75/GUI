@@ -101,7 +101,9 @@ namespace GUI
                 bool enable = (op == "start" || op == "enable");
                 int parentPid = (args.Length >= 3 && int.TryParse(args[2], out int pid)) ? pid : 0;
                 string? modeId = args.Length >= 4 ? args[3] : null;
-                var (success, msg) = Engine.GoodbyeDpiEngine.SetEnabledDirect(enable, parentPid, modeId);
+                var (success, msg) = op == "restart"
+                    ? Engine.GoodbyeDpiEngine.RestartDirect(parentPid, modeId)
+                    : Engine.GoodbyeDpiEngine.SetEnabledDirect(enable, parentPid, modeId);
                 Log($"--goodbyedpi-op {op} (parent={parentPid}, mode={modeId}) -> {success} ({msg})");
                 Environment.Exit(success ? 0 : 1);
                 return;

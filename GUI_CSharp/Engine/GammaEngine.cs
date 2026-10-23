@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace GUI.Engine
@@ -79,8 +81,152 @@ namespace GUI.Engine
         public double CurrentBlackBoost => _lastBlackBoost;
         public double CurrentContrast => _lastContrast;
 
+        // LUT each monitor had before this app wrote to it (Windows calibration / ICC vcgt), keyed by MonitorKey.
+        // "Restore" writes these back instead of a flat identity ramp, so a calibrated monitor keeps its calibration.
+        private readonly Dictionary<string, RAMP> _originalRamps = new(StringComparer.OrdinalIgnoreCase);
+        private bool _captureEnabled = false;
+        private bool _ownsSessionMarker = false;
+
+        // Exists while a session that captured LUTs is running. Still there at the next start = that run did not
+        // restore the LUTs (crash / kill), so what is loaded now may be its curve or a black flash, not the calibration.
+        private static string SessionMarkerPath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GUI", "gamma_session.lock");
+
         public GammaEngine()
         {
+        }
+
+        // Call once at startup, before the first ramp write. Monitors attached later are captured the first time
+        // a ramp is written while they are attached (still untouched by this app at that point).
+        public void CaptureOriginalRamps()
+        {
+            lock (_lock)
+            {
+                if (_isDisposed || _captureEnabled) return;
+                _captureEnabled = true;
+
+                bool previousRunLeftLut = false;
+                try
+                {
+                    previousRunLeftLut = File.Exists(SessionMarkerPath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(SessionMarkerPath)!);
+                    File.WriteAllText(SessionMarkerPath, Environment.ProcessId.ToString());
+                    _ownsSessionMarker = true;
+                }
+                catch (Exception ex)
+                {
+                    Program.Log($"GammaEngine: session marker unavailable: {ex.Message}");
+                }
+
+                if (previousRunLeftLut)
+                {
+                    // Don't adopt a leftover curve as the "original": these monitors fall back to identity
+                    Program.Log("GammaEngine: previous run did not restore the LUTs -> using identity as original for current monitors.");
+                    RAMP identity = BuildIdentityRamp();
+                    foreach (var d in DisplayTopology.GetDisplays())
+                    {
+                        _originalRamps[MonitorKey(d)] = identity;
+                    }
+                }
+
+                CaptureUnknownDisplays();
+            }
+        }
+
+        private static string MonitorKey(DisplayInfo d) => string.IsNullOrEmpty(d.DevicePath) ? d.GdiName : d.DevicePath;
+
+        // Reads the LUT of every attached monitor not seen yet. Cheap when nothing is new (dictionary lookups on the
+        // cached topology), so it runs before every write and a hot-plugged monitor is captured before we touch it.
+        private void CaptureUnknownDisplays()
+        {
+            if (!_captureEnabled) return;
+            foreach (var d in DisplayTopology.GetDisplays())
+            {
+                string key = MonitorKey(d);
+                if (_originalRamps.ContainsKey(key)) continue;
+
+                RAMP ramp;
+                bool ok = false;
+                IntPtr hdc = d.IsPrimary ? GetDC(IntPtr.Zero) : CreateDC(null, d.GdiName, null, IntPtr.Zero);
+                if (hdc != IntPtr.Zero)
+                {
+                    try
+                    {
+                        ok = GetDeviceGammaRamp(hdc, &ramp) && IsPlausibleOriginal(&ramp);
+                    }
+                    finally
+                    {
+                        if (d.IsPrimary) ReleaseDC(IntPtr.Zero, hdc);
+                        else DeleteDC(hdc);
+                    }
+                }
+
+                if (!ok) ramp = BuildIdentityRamp();
+                _originalRamps[key] = ramp;
+                Program.Log($"GammaEngine: original LUT of {d.GdiName} ({d.FriendlyName}) -> {(ok ? "captured" : "identity")}");
+            }
+        }
+
+        // A calibration curve rises steadily and still reaches a bright white; a dimmed or inverted ramp
+        // (another tool's effect, a stuck flash) is not something to restore.
+        private static bool IsPlausibleOriginal(RAMP* ramp)
+        {
+            ushort* channels0 = ramp->Red;
+            for (int c = 0; c < 3; c++)
+            {
+                ushort* ch = channels0 + c * 256;
+                if (ch[255] < 32768) return false;
+                for (int i = 1; i < 256; i++)
+                {
+                    if (ch[i] < ch[i - 1]) return false;
+                }
+            }
+            return true;
+        }
+
+        // Puts every attached monitor back on its original LUT (identity when unknown or when GDI refuses it)
+        private bool RestoreOriginalRamps()
+        {
+            CaptureUnknownDisplays();
+            var displays = DisplayTopology.GetDisplays();
+            if (displays.Count == 0)
+            {
+                RAMP identity = BuildIdentityRamp();
+                return SetRampToAllDisplays(&identity);
+            }
+
+            bool any = false;
+            foreach (var d in displays)
+            {
+                RAMP ramp = _originalRamps.TryGetValue(MonitorKey(d), out var orig) ? orig : BuildIdentityRamp();
+                bool ok = WriteRampTo(d, &ramp);
+                if (!ok)
+                {
+                    RAMP identity = BuildIdentityRamp();
+                    ok = WriteRampTo(d, &identity);
+                }
+                any |= ok;
+            }
+            return any;
+        }
+
+        private static bool WriteRampTo(DisplayInfo d, RAMP* pRamp)
+        {
+            IntPtr hdc = d.IsPrimary ? GetDC(IntPtr.Zero) : CreateDC(null, d.GdiName, null, IntPtr.Zero);
+            if (hdc == IntPtr.Zero) return false;
+            try
+            {
+                for (int retry = 0; retry < 3; retry++)
+                {
+                    if (SetDeviceGammaRamp(hdc, pRamp)) return true;
+                }
+                return false;
+            }
+            finally
+            {
+                if (d.IsPrimary) ReleaseDC(IntPtr.Zero, hdc);
+                else DeleteDC(hdc);
+            }
         }
 
         private void EnsureBaseCurve(double gamma, double blackBoost)
@@ -113,6 +259,8 @@ namespace GUI.Engine
 
         private unsafe bool SetRampToAllDisplays(RAMP* pRamp)
         {
+            CaptureUnknownDisplays();
+
             // FAST PATH: Direct hardware update via primary virtual desktop DC (0.01ms!)
             IntPtr primaryHdc = GetDC(IntPtr.Zero);
             bool primarySuccess = false;
@@ -179,6 +327,7 @@ namespace GUI.Engine
             string? target = _targetDisplay;
             if (target == null) return SetRampToAllDisplays(pRamp);
 
+            CaptureUnknownDisplays();
             DisplayInfo? match = null;
             foreach (var d in DisplayTopology.GetDisplays())
             {
@@ -226,9 +375,9 @@ namespace GUI.Engine
 
                 if (ActiveMode == GammaPipelineMode.HardwareLut)
                 {
-                    // Clear every LUT so the previous target is not left tinted / dimmed, then re-apply on the new one
-                    RAMP identity = BuildIdentityRamp();
-                    SetRampToAllDisplays(&identity);
+                    // Put every LUT back to its original so the previous target is not left tinted / dimmed,
+                    // then re-apply on the new one
+                    RestoreOriginalRamps();
                     if (IsCustomActive)
                     {
                         fixed (RAMP* pRamp = &_lastAppliedRamp)
@@ -308,17 +457,14 @@ namespace GUI.Engine
                 _lastAppliedRamp = newRamp;
                 IsCustomActive = true;
 
-                // If any monitor is disabled, hardware LUT cannot apply properly.
-                // In that case, directly route to DWM Compositor Shader Engine.
-                if (MonitorEngine.HasAnyDisabledMonitors())
+                // A disabled monitor (stretched-resolution setup) used to send everything to the DWM shader. That
+                // shader is desktop-wide and may not reach an exclusive-fullscreen game, which is the case the
+                // hardware LUT exists for. So the LUT is still tried first on the attached monitors and read back;
+                // only when it did not take effect does this monitor setup stay on DWM until it changes.
+                bool monitorsDisabled = MonitorEngine.HasAnyDisabledMonitors();
+                if (monitorsDisabled && _switchedToDwmDueToDisabledMonitor)
                 {
-                    if (!_switchedToDwmDueToDisabledMonitor || ActiveMode != GammaPipelineMode.DwmCompositor)
-                    {
-                        Program.Log($"GammaEngine.ApplyCurve: Disabled monitor detected -> applying via DwmShaderColorEngine (DWM Pixel Shader).");
-                        ResetHardwareLutOnly();
-                        _switchedToDwmDueToDisabledMonitor = true;
-                        ActiveMode = GammaPipelineMode.DwmCompositor;
-                    }
+                    ActiveMode = GammaPipelineMode.DwmCompositor;
                     return DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
                 }
 
@@ -357,6 +503,18 @@ namespace GUI.Engine
                     }
                 }
 
+                if (success && monitorsDisabled)
+                {
+                    fixed (RAMP* pApplied = &_lastAppliedRamp)
+                    {
+                        if (ReadBackMatches(pApplied) == false)
+                        {
+                            Program.Log("GammaEngine.ApplyCurve: monitor disabled and the hardware LUT did not take effect -> DWM shader.");
+                            success = false;
+                        }
+                    }
+                }
+
                 if (success)
                 {
                     _switchedToDwmDueToDisabledMonitor = false;
@@ -371,7 +529,14 @@ namespace GUI.Engine
                 {
                     Program.Log($"GammaEngine.ApplyCurve: Hardware LUT failed -> falling back to DwmShaderColorEngine.");
                 }
-                _switchedToDwmDueToDisabledMonitor = false;
+                // Remembered only while monitors are disabled: re-enabling them retries the hardware LUT
+                _switchedToDwmDueToDisabledMonitor = monitorsDisabled;
+                if (monitorsDisabled)
+                {
+                    // The write may have landed partly; don't stack it under the DWM effect.
+                    // _lastAppliedRamp keeps the curve so the switch back to the LUT can re-apply it.
+                    RestoreOriginalRamps();
+                }
                 ActiveMode = GammaPipelineMode.DwmCompositor;
                 return DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
             }
@@ -418,103 +583,75 @@ namespace GUI.Engine
 
                 bool monitorsDisabled = MonitorEngine.HasAnyDisabledMonitors();
 
-                // Case 1: Monitor is disabled
-                if (monitorsDisabled)
-                {
-                    if (ActiveMode != GammaPipelineMode.DwmCompositor)
-                    {
-                        Program.Log("GammaEngine.EnforceIfNeeded: Monitor disabled detected -> switching to DWM Shader.");
-                        ActiveMode = GammaPipelineMode.DwmCompositor;
-                        _switchedToDwmDueToDisabledMonitor = true;
-                        ResetHardwareLutOnly();
-                        return DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
-                    }
-                    // Already in DWM mode while monitor is disabled: nothing to enforce repeatedly
-                    return false;
-                }
-
-                // Case 2: Monitor was previously disabled and is now re-enabled
+                // Case 1: on DWM because the LUT did not take effect with a monitor disabled, and the monitor is
+                // back: rebuild the curve (ApplyCurveCore tries the hardware LUT first again)
                 if (_switchedToDwmDueToDisabledMonitor && !monitorsDisabled)
                 {
                     _switchedToDwmDueToDisabledMonitor = false;
-                    Program.Log("GammaEngine.EnforceIfNeeded: Monitor re-enabled detected -> switching back to Hardware LUT.");
-                    DwmShaderColorEngine.ResetGammaAndBoost();
-                    fixed (RAMP* pRamp = &_lastAppliedRamp)
-                    {
-                        if (SetRampToTargets(pRamp))
-                        {
-                            ActiveMode = GammaPipelineMode.HardwareLut;
-                            return true;
-                        }
-                    }
-                    // If hardware LUT fails even after re-enable, stay on DWM
-                    ActiveMode = GammaPipelineMode.DwmCompositor;
-                    DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
-                    return true;
+                    Program.Log("GammaEngine.EnforceIfNeeded: Monitor re-enabled detected -> retrying Hardware LUT.");
+                    return ApplyCurveCore(_lastGamma, _lastBlackBoost, _lastContrast);
                 }
 
-                // If in DWM mode (e.g. because HW LUT failed on this machine), stay stably without flickering
+                // If in DWM mode (HW LUT failed on this machine / monitor setup), stay stably without flickering
                 if (ActiveMode == GammaPipelineMode.DwmCompositor)
                 {
                     return false;
                 }
 
-                // Case 3: Standard Hardware LUT mode - check if ramp was overridden
-                bool needsEnforce = false;
-                RAMP currentRamp;
-
-                // Read back from the monitor the profile targets (the game may run on a non-primary display)
-                string? target = _targetDisplay;
-                bool readTarget = target != null && !string.Equals(target, DisplayTopology.GetPrimaryName(), StringComparison.OrdinalIgnoreCase);
-                IntPtr hdc = readTarget ? CreateDC(null, target, null, IntPtr.Zero) : GetDC(IntPtr.Zero);
-                if (hdc != IntPtr.Zero)
+                // Case 2: Standard Hardware LUT mode - check if ramp was overridden
+                bool needsEnforce;
+                fixed (RAMP* pApplied = &_lastAppliedRamp)
                 {
-                    if (GetDeviceGammaRamp(hdc, &currentRamp))
-                    {
-                        ushort currentMid = currentRamp.Red[128];
-                        ushort targetMid = _lastAppliedRamp.Red[128];
-                        if (Math.Abs(currentMid - targetMid) > 800)
-                        {
-                            needsEnforce = true;
-                        }
-                    }
-                    if (readTarget) DeleteDC(hdc);
-                    else ReleaseDC(IntPtr.Zero, hdc);
-                }
-                else
-                {
-                    IntPtr dispHdc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
-                    if (dispHdc != IntPtr.Zero)
-                    {
-                        if (GetDeviceGammaRamp(dispHdc, &currentRamp))
-                        {
-                            ushort currentMid = currentRamp.Red[128];
-                            ushort targetMid = _lastAppliedRamp.Red[128];
-                            if (Math.Abs(currentMid - targetMid) > 800)
-                            {
-                                needsEnforce = true;
-                            }
-                        }
-                        DeleteDC(dispHdc);
-                    }
+                    needsEnforce = ReadBackMatches(pApplied) == false;
                 }
 
                 if (needsEnforce)
                 {
+                    bool success;
                     fixed (RAMP* pRamp = &_lastAppliedRamp)
                     {
-                        bool success = SetRampToTargets(pRamp);
-                        if (!success)
-                        {
-                            Program.Log("GammaEngine.EnforceIfNeeded: Hardware LUT re-apply failed -> switching to DWM Shader.");
-                            ActiveMode = GammaPipelineMode.DwmCompositor;
-                            return DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
-                        }
-                        return success;
+                        success = SetRampToTargets(pRamp);
+                        if (success && monitorsDisabled && ReadBackMatches(pRamp) == false) success = false;
                     }
+                    if (!success)
+                    {
+                        Program.Log("GammaEngine.EnforceIfNeeded: Hardware LUT re-apply failed -> switching to DWM Shader.");
+                        _switchedToDwmDueToDisabledMonitor = monitorsDisabled;
+                        ActiveMode = GammaPipelineMode.DwmCompositor;
+                        return DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
+                    }
+                    return true;
                 }
 
                 return false;
+            }
+        }
+
+        // Whether the LUT loaded on the profile's monitor (primary when none) matches `expected`, compared on the
+        // red channel's mid-grey, the level an override or a dropped write moves the most. null = cannot be read.
+        private bool? ReadBackMatches(RAMP* expected)
+        {
+            string? target = _targetDisplay;
+            bool readTarget = target != null && !string.Equals(target, DisplayTopology.GetPrimaryName(), StringComparison.OrdinalIgnoreCase);
+            IntPtr hdc = readTarget ? CreateDC(null, target, null, IntPtr.Zero) : GetDC(IntPtr.Zero);
+            bool ownsDc = readTarget;
+            if (hdc == IntPtr.Zero)
+            {
+                hdc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
+                ownsDc = true;
+            }
+            if (hdc == IntPtr.Zero) return null;
+
+            try
+            {
+                RAMP current;
+                if (!GetDeviceGammaRamp(hdc, &current)) return null;
+                return Math.Abs(current.Red[128] - expected->Red[128]) <= 800;
+            }
+            finally
+            {
+                if (ownsDc) DeleteDC(hdc);
+                else ReleaseDC(IntPtr.Zero, hdc);
             }
         }
 
@@ -549,10 +686,10 @@ namespace GUI.Engine
         {
             try
             {
-                // Always every monitor, so a previous target never stays tinted / dimmed
-                RAMP identity = BuildIdentityRamp();
-                _lastAppliedRamp = identity;
-                SetRampToAllDisplays(&identity);
+                // Always every monitor, so a previous target never stays tinted / dimmed.
+                // _lastAppliedRamp is only compared while a custom curve is active, so identity is fine there.
+                _lastAppliedRamp = BuildIdentityRamp();
+                RestoreOriginalRamps();
             }
             catch { }
         }
@@ -588,18 +725,7 @@ namespace GUI.Engine
                     ActiveMode = state.Mode;
                     IsCustomActive = true;
                     _lastApplyOk = true;
-                    if (ActiveMode == GammaPipelineMode.DwmCompositor || MonitorEngine.HasAnyDisabledMonitors())
-                    {
-                        ActiveMode = GammaPipelineMode.DwmCompositor;
-                        DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
-                    }
-                    else
-                    {
-                        fixed (RAMP* pRamp = &_lastAppliedRamp)
-                        {
-                            SetRampToTargets(pRamp);
-                        }
-                    }
+                    ReapplyLastRamp();
                 }
                 else
                 {
@@ -628,24 +754,28 @@ namespace GUI.Engine
                     _lastAppliedRamp = ramp;
                     IsCustomActive = true;
                     _lastApplyOk = true;
-                    if (ActiveMode == GammaPipelineMode.DwmCompositor || MonitorEngine.HasAnyDisabledMonitors())
-                    {
-                        ActiveMode = GammaPipelineMode.DwmCompositor;
-                        DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
-                    }
-                    else
-                    {
-                        fixed (RAMP* pRamp = &_lastAppliedRamp)
-                        {
-                            SetRampToTargets(pRamp);
-                        }
-                    }
+                    ReapplyLastRamp();
                 }
                 else
                 {
                     ResetToIdentity();
                 }
             }
+        }
+
+        // Puts _lastAppliedRamp back on screen through the current pipeline. A disabled monitor no longer forces
+        // DWM here: the hardware LUT is used while it works (see ApplyCurveCore), DWM only when it fails.
+        private void ReapplyLastRamp()
+        {
+            if (ActiveMode != GammaPipelineMode.DwmCompositor)
+            {
+                fixed (RAMP* pRamp = &_lastAppliedRamp)
+                {
+                    if (SetRampToTargets(pRamp)) return;
+                }
+                ActiveMode = GammaPipelineMode.DwmCompositor;
+            }
+            DwmShaderColorEngine.SetGammaAndBoost(_lastGamma, _lastBlackBoost, _lastContrast);
         }
 
         public void Restore()
@@ -660,6 +790,13 @@ namespace GUI.Engine
                 if (_isDisposed) return;
                 ResetToIdentity();
                 _isDisposed = true;
+
+                // LUTs are back to their originals: the next start may trust what it reads
+                if (_ownsSessionMarker)
+                {
+                    try { File.Delete(SessionMarkerPath); } catch { }
+                    _ownsSessionMarker = false;
+                }
             }
         }
     }

@@ -110,29 +110,60 @@ namespace GUI.Config
             return appDataFile;
         }
 
+        // Set when the existing config could not be read: a copy kept for the user (null if none could be made)
+        public static string? RecoveredBackupPath { get; private set; }
+        // Unreadable config that could not be backed up either: Save must not overwrite the only copy of it
+        public static bool IsSaveBlocked { get; private set; }
+
         public static AppConfig Load()
         {
             string path = GetConfigPath();
             if (File.Exists(path))
             {
-                try
+                Exception? error = null;
+                // A config that is momentarily locked (antivirus, cloud sync) is retried before giving up on it
+                for (int attempt = 0; attempt < 3; attempt++)
                 {
-                    string json = File.ReadAllText(path);
-                    var cfg = JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+                    try
                     {
-                        PropertyNameCaseInsensitive = true,
-                        ReadCommentHandling = JsonCommentHandling.Skip
-                    });
-                    if (cfg != null)
-                    {
+                        string json = File.ReadAllText(path);
+                        var cfg = JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+                        {
+                            PropertyNameCaseInsensitive = true,
+                            ReadCommentHandling = JsonCommentHandling.Skip
+                        });
+                        if (cfg == null) throw new JsonException("Config file contains null.");
+
                         cfg.Desktop ??= new DesktopConfig();
                         cfg.Games = cfg.Games;
                         return cfg;
                     }
+                    catch (IOException ex)
+                    {
+                        error = ex;
+                        System.Threading.Thread.Sleep(150);
+                    }
+                    catch (Exception ex)
+                    {
+                        error = ex;
+                        break;
+                    }
                 }
-                catch
+
+                // Starting from defaults is fine, but the next Save would silently replace every game profile:
+                // keep a copy of the unreadable file first, and refuse to save over it if no copy could be made.
+                Program.Log($"ConfigManager: cannot read '{path}': {error?.Message}");
+                try
                 {
-                    // Fallback to default
+                    string backup = $"{path}.corrupt-{DateTime.Now:yyyyMMdd-HHmmss}.bak";
+                    File.Copy(path, backup, overwrite: true);
+                    RecoveredBackupPath = backup;
+                    Program.Log($"ConfigManager: unreadable config backed up to '{backup}', starting from defaults.");
+                }
+                catch (Exception ex)
+                {
+                    IsSaveBlocked = true;
+                    Program.Log($"ConfigManager: backup failed ({ex.Message}) -> saving disabled for this session to keep the original file.");
                 }
             }
 
@@ -144,6 +175,12 @@ namespace GUI.Config
 
         public static void Save(AppConfig cfg)
         {
+            if (IsSaveBlocked)
+            {
+                Program.Log("ConfigManager: save skipped (original config could not be read or backed up).");
+                return;
+            }
+
             try
             {
                 string path = GetConfigPath();

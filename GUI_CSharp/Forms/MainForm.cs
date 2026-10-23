@@ -52,12 +52,15 @@ namespace GUI.Forms
         private System.Windows.Forms.Timer? _gammaEnforceTimer;
         private System.Windows.Forms.Timer? _saveConfigDebounceTimer;
         private readonly object _gamesLock = new();
-        private string? _currentGameExe = null;
+        // Written on the UI thread only; volatile because the GSI threads read it on every packet
+        private volatile string? _currentGameExe = null;
         private int _currentGamePid = 0;
         // Profile in use, re-applied (with its saved monitor) after a display topology change
         private GameProfile? _currentGameProfile = null;
         // Debounces WM_DISPLAYCHANGE bursts (HDMI plug/unplug, MUX switch) before re-enumerating displays
         private System.Windows.Forms.Timer? _displayChangeTimer;
+        // Keeps the observer status line current; runs only while the window is visible (idle in the tray)
+        private System.Windows.Forms.Timer? _statusLabelTimer;
         private bool _isExplicitExit = false;
         private bool _isCleanedUp = false;
 
@@ -80,6 +83,8 @@ namespace GUI.Forms
             _config = ConfigManager.Load();
             _vibrance = new UnifiedVibranceEngine();
             _gammaEngine = new GammaEngine();
+            // Before anything can write a ramp (GSI starts below), so the calibration LUTs are what gets captured
+            _gammaEngine.CaptureOriginalRamps();
             _observer = new ActiveWindowObserver();
             _gsiListener = new Cs2GsiListener(_config.Cs2GsiPort);
             _gsiListener.StateUpdated += OnCs2GsiStateUpdated;
@@ -139,6 +144,22 @@ namespace GUI.Forms
                 }
             };
 
+            _statusLabelTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _statusLabelTimer.Tick += (s, e) => UpdateObserverStatus();
+            this.VisibleChanged += (s, e) =>
+            {
+                if (_isCleanedUp) return;
+                if (this.Visible)
+                {
+                    UpdateObserverStatus();
+                    _statusLabelTimer.Start();
+                }
+                else
+                {
+                    _statusLabelTimer.Stop();
+                }
+            };
+
             this.Icon = IconHelper.GetAppIcon();
 
             InitializeComponent();
@@ -158,6 +179,7 @@ namespace GUI.Forms
                 Program.Log("MainForm.Load fired");
                 InitObserver();
                 RefreshCurrentResolution(rebuildButtons: true);
+                NotifyConfigRecovery();
             };
             this.Shown += (s, e) =>
             {
@@ -468,6 +490,23 @@ namespace GUI.Forms
 
             this.FormClosing += OnFormClosing;
             this.FormClosed += (s, e) => CleanupAndRestoreDefaults();
+        }
+
+        // Tray balloon instead of a dialog: also shows when started minimized by autostart
+        private void NotifyConfigRecovery()
+        {
+            string? text = null;
+            if (ConfigManager.IsSaveBlocked)
+            {
+                text = "Your config.json could not be read or backed up. Defaults are used and changes will NOT be saved this session.";
+            }
+            else if (ConfigManager.RecoveredBackupPath != null)
+            {
+                text = $"Your config.json could not be read. Defaults are used; the old file was kept as {Path.GetFileName(ConfigManager.RecoveredBackupPath)}.";
+            }
+            if (text == null) return;
+
+            try { _notifyIcon.ShowBalloonTip(10000, "GUI: settings reset", text, ToolTipIcon.Warning); } catch { }
         }
 
         private void InitSingleInstanceListener()
@@ -988,14 +1027,17 @@ namespace GUI.Forms
             ScheduleReapply(exe, prof, 150);
             ScheduleReapply(exe, prof, 350);
 
-            if (string.Equals(exe, "cs2.exe", StringComparison.OrdinalIgnoreCase) && _gsiListener.IsCs2Connected)
-            {
-                _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}] • CS2 GSI Active";
-            }
-            else
-            {
-                _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
-            }
+            UpdateObserverStatus();
+        }
+
+        // "CS2 GSI Active" follows the live connection. It used to be set only when a profile was applied, which is
+        // usually before CS2 sends its first packet, so it rarely showed. Refreshed by _statusLabelTimer while visible.
+        private void UpdateObserverStatus()
+        {
+            if (this.IsDisposed || _isCleanedUp) return;
+            string text = $"Running! [{_vibrance.EngineName}]";
+            if (_gsiListener.IsCs2Connected) text += " • CS2 GSI Active";
+            if (_lblObserverStatus.Text != text) _lblObserverStatus.Text = text;
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
         }
 
@@ -1005,30 +1047,11 @@ namespace GUI.Forms
         {
             if (this.IsDisposed || _isCleanedUp) return;
 
-            // Check if CS2 is active: either tracked as current game, or foreground window belongs to cs2.exe
-            bool isCs2Active = string.Equals(_currentGameExe, "cs2.exe", StringComparison.OrdinalIgnoreCase);
-            if (!isCs2Active)
-            {
-                try
-                {
-                    IntPtr fg = GetForegroundWindow();
-                    if (fg != IntPtr.Zero)
-                    {
-                        GetWindowThreadProcessId(fg, out uint pid);
-                        if (pid != 0)
-                        {
-                            string fgExe = ProcessHelper.GetProcessExeName((int)pid);
-                            if (string.Equals(fgExe, "cs2.exe", StringComparison.OrdinalIgnoreCase))
-                            {
-                                isCs2Active = true;
-                                _currentGameExe = "cs2.exe";
-                                _currentGamePid = (int)pid;
-                            }
-                        }
-                    }
-                }
-                catch { }
-            }
+            // Check if CS2 is active: either tracked as current game, or foreground window belongs to cs2.exe.
+            // Runs on the GSI threads: only reads _currentGameExe (owned by the UI thread), never writes it, so a
+            // packet racing an Alt-Tab cannot mark CS2 as the current game after ResetToDesktop and dim the desktop.
+            bool isCs2Active = string.Equals(_currentGameExe, "cs2.exe", StringComparison.OrdinalIgnoreCase)
+                || IsForegroundCs2();
 
             // Only apply anti-flash if CS2 is focused
             if (!isCs2Active)
@@ -1096,6 +1119,33 @@ namespace GUI.Forms
             }
         }
 
+        // Last foreground window checked by IsForegroundCs2, so packets while the same window stays focused skip the
+        // process name lookup. Replaced as a whole (immutable), since the GSI apply and watchdog threads both read it.
+        private sealed record ForegroundSample(IntPtr Hwnd, uint Pid, bool IsCs2);
+        private volatile ForegroundSample? _lastForegroundSample;
+
+        private bool IsForegroundCs2()
+        {
+            try
+            {
+                IntPtr fg = GetForegroundWindow();
+                if (fg == IntPtr.Zero) return false;
+                GetWindowThreadProcessId(fg, out uint pid);
+                if (pid == 0) return false;
+
+                var cached = _lastForegroundSample;
+                if (cached != null && cached.Hwnd == fg && cached.Pid == pid) return cached.IsCs2;
+
+                bool isCs2 = string.Equals(ProcessHelper.GetProcessExeName((int)pid), "cs2.exe", StringComparison.OrdinalIgnoreCase);
+                _lastForegroundSample = new ForegroundSample(fg, pid, isCs2);
+                return isCs2;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private void ScheduleReapply(string exe, GameProfile prof, int delayMs)
         {
             Task.Delay(delayMs).ContinueWith(_ =>
@@ -1134,8 +1184,7 @@ namespace GUI.Forms
             // Reset every LUT first, then drop the target, so the game curve never spreads to all monitors
             _gammaEngine.Restore();
             _gammaEngine.SetTargetDisplay(null);
-            _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
-            _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
+            UpdateObserverStatus();
         }
 
         // HDMI plugged / unplugged, MUX or Advanced Optimus switch, resolution change...
@@ -1156,7 +1205,7 @@ namespace GUI.Forms
                 else
                 {
                     _vibrance.Restore();
-                    _lblObserverStatus.Text = $"Running! [{_vibrance.EngineName}]";
+                    UpdateObserverStatus();
                 }
             }
             catch (Exception ex)
@@ -1245,6 +1294,8 @@ namespace GUI.Forms
                 try { _saveConfigDebounceTimer?.Dispose(); } catch { }
                 try { _displayChangeTimer?.Stop(); } catch { }
                 try { _displayChangeTimer?.Dispose(); } catch { }
+                try { _statusLabelTimer?.Stop(); } catch { }
+                try { _statusLabelTimer?.Dispose(); } catch { }
                 try
                 {
                     _pnlResGrid?.Controls.Clear();

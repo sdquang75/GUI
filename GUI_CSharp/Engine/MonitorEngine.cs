@@ -14,6 +14,9 @@ namespace GUI.Engine
         public bool Enabled { get; set; } = true;
         public uint DevInst { get; set; } = 0;
         public bool IsPrimary { get; set; } = false;
+        // Enabled AND currently showing part of the desktop. An enabled devnode can still be dark
+        // (laptop lid closed, monitor set to "Disconnect this display", input switched away).
+        public bool IsActive { get; set; } = false;
     }
 
     public static class MonitorEngine
@@ -224,7 +227,50 @@ namespace GUI.Engine
                 }
             }
 
+            MarkActiveMonitors(list);
             return list;
+        }
+
+        // A monitor shows the desktop when an active DisplayConfig path's device path ("\\?\DISPLAY#DEL4123#5&...#{guid}")
+        // contains its instance ID ("DISPLAY\DEL4123\5&...") with '\' as '#'. Without any device path (DisplayConfig
+        // failed) there is nothing to compare, so every enabled monitor counts as active.
+        private static void MarkActiveMonitors(List<MonitorInfo> list)
+        {
+            var displays = DisplayTopology.GetDisplays();
+            bool pathsKnown = false;
+            foreach (var d in displays)
+            {
+                if (!string.IsNullOrEmpty(d.DevicePath))
+                {
+                    pathsKnown = true;
+                    break;
+                }
+            }
+
+            foreach (var m in list)
+            {
+                if (!m.Enabled || string.IsNullOrEmpty(m.InstanceId))
+                {
+                    m.IsActive = false;
+                    continue;
+                }
+                if (!pathsKnown)
+                {
+                    m.IsActive = true;
+                    continue;
+                }
+
+                string normalizedInstance = m.InstanceId.Replace('\\', '#');
+                m.IsActive = false;
+                foreach (var d in displays)
+                {
+                    if (d.DevicePath.IndexOf(normalizedInstance, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        m.IsActive = true;
+                        break;
+                    }
+                }
+            }
         }
 
         private static bool _cachedHasDisabled = false;
@@ -245,11 +291,9 @@ namespace GUI.Engine
         {
             lock (_monitorCheckLock)
             {
-                if (_disabledInSession.Count > 0)
-                {
-                    return true;
-                }
-
+                // Always the real devnode state: a monitor this app disabled may have been re-enabled elsewhere
+                // (Device Manager, replug, another tool), and trusting _disabledInSession would pin gamma to the
+                // desktop-wide DWM path for the rest of the session.
                 long now = Environment.TickCount64;
                 if (_lastDisabledCheckTick != 0)
                 {
@@ -267,8 +311,21 @@ namespace GUI.Engine
 
                 // Never scanned, or invalidated by a display change / monitor enable-disable: must be accurate now
                 _lastDisabledCheckTick = now;
-                _cachedHasDisabled = ScanHasDisabled();
+                _cachedHasDisabled = ScanHasDisabled(out var enabledIds);
+                ForgetReenabled(enabledIds);
                 return _cachedHasDisabled;
+            }
+        }
+
+        // Drops monitors this app disabled that are present and enabled again, so RestoreOnExit does not re-enable
+        // (or ask UAC for) something already on. Caller holds _monitorCheckLock.
+        private static void ForgetReenabled(HashSet<string> enabledIds)
+        {
+            if (_disabledInSession.Count == 0) return;
+            int removed = _disabledInSession.RemoveWhere(id => enabledIds.Contains(id));
+            if (removed > 0)
+            {
+                Program.Log($"MonitorEngine: {removed} monitor(s) disabled by this app were re-enabled elsewhere.");
             }
         }
 
@@ -277,7 +334,7 @@ namespace GUI.Engine
 
         private static void RefreshDisabledCache(int generation)
         {
-            bool hasDisabled = ScanHasDisabled();
+            bool hasDisabled = ScanHasDisabled(out var enabledIds);
             lock (_monitorCheckLock)
             {
                 _disabledRefreshPending = false;
@@ -285,20 +342,24 @@ namespace GUI.Engine
                 if (generation != _disabledCacheGeneration) return;
                 _cachedHasDisabled = hasDisabled;
                 _lastDisabledCheckTick = Environment.TickCount64;
+                ForgetReenabled(enabledIds);
             }
         }
 
-        private static bool ScanHasDisabled()
+        private static bool ScanHasDisabled(out HashSet<string> enabledIds)
         {
+            enabledIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool hasDisabled = false;
             try
             {
                 foreach (var m in EnumerateMonitors())
                 {
-                    if (!m.Enabled) return true;
+                    if (!m.Enabled) hasDisabled = true;
+                    else if (!string.IsNullOrEmpty(m.InstanceId)) enabledIds.Add(m.InstanceId);
                 }
             }
             catch { }
-            return false;
+            return hasDisabled;
         }
 
         public static bool IsPrimaryMonitorDisabled()

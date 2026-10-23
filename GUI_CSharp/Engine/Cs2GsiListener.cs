@@ -441,52 +441,12 @@ namespace GUI.Engine
                     if (stateElem.TryGetProperty("flashed", out var flashedElem))
                     {
                         rawFlashed = flashedElem.GetRawText();
-                        if (flashedElem.ValueKind == JsonValueKind.Number && flashedElem.TryGetDouble(out double fVal))
-                        {
-                            if (fVal > 1.0)
-                            {
-                                flashedFraction = Math.Clamp(fVal / 255.0, 0.0, 1.0);
-                            }
-                            else if (fVal > 0.0)
-                            {
-                                flashedFraction = Math.Clamp(fVal, 0.0, 1.0);
-                            }
-                        }
-                        else if (flashedElem.ValueKind == JsonValueKind.True)
-                        {
-                            flashedFraction = 1.0;
-                        }
-                        else if (flashedElem.ValueKind == JsonValueKind.String &&
-                                 double.TryParse(flashedElem.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double fsVal))
-                        {
-                            if (fsVal > 1.0) flashedFraction = Math.Clamp(fsVal / 255.0, 0.0, 1.0);
-                            else if (fsVal > 0.0) flashedFraction = Math.Clamp(fsVal, 0.0, 1.0);
-                        }
+                        flashedFraction = ParseIntensity(flashedElem);
                     }
 
                     if (stateElem.TryGetProperty("smoked", out var smokedElem))
                     {
-                        if (smokedElem.ValueKind == JsonValueKind.Number && smokedElem.TryGetDouble(out double sVal))
-                        {
-                            if (sVal > 1.0)
-                            {
-                                smokedFraction = Math.Clamp(sVal / 255.0, 0.0, 1.0);
-                            }
-                            else if (sVal > 0.0)
-                            {
-                                smokedFraction = Math.Clamp(sVal, 0.0, 1.0);
-                            }
-                        }
-                        else if (smokedElem.ValueKind == JsonValueKind.True)
-                        {
-                            smokedFraction = 1.0;
-                        }
-                        else if (smokedElem.ValueKind == JsonValueKind.String &&
-                                 double.TryParse(smokedElem.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double ssVal))
-                        {
-                            if (ssVal > 1.0) smokedFraction = Math.Clamp(ssVal / 255.0, 0.0, 1.0);
-                            else if (ssVal > 0.0) smokedFraction = Math.Clamp(ssVal, 0.0, 1.0);
-                        }
+                        smokedFraction = ParseIntensity(smokedElem);
                     }
 
                     if (stateElem.TryGetProperty("health", out var healthElem))
@@ -528,6 +488,41 @@ namespace GUI.Engine
                 state = new GsiState(notifyFlashed, notifySmoked, notifyActive, notifyRawFlashed);
             }
             return shouldNotify;
+        }
+
+        // CS2 sends "flashed" / "smoked" as integers 0-255, so an integer is always a 0-255 level: the tail of a flash
+        // reports 1 (= 1/255), which must not be read as a 1.0 fraction (full black). Only a non-integer number is
+        // taken as an already normalized 0.0-1.0 fraction.
+        private static double ParseIntensity(JsonElement elem)
+        {
+            switch (elem.ValueKind)
+            {
+                case JsonValueKind.Number:
+                    if (elem.TryGetInt64(out long iVal)) return Math.Clamp(iVal / 255.0, 0.0, 1.0);
+                    if (elem.TryGetDouble(out double dVal)) return NormalizeIntensity(dVal);
+                    return 0.0;
+                case JsonValueKind.True:
+                    return 1.0;
+                case JsonValueKind.String:
+                    string? s = elem.GetString();
+                    if (long.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out long isVal))
+                    {
+                        return Math.Clamp(isVal / 255.0, 0.0, 1.0);
+                    }
+                    if (double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double dsVal))
+                    {
+                        return NormalizeIntensity(dsVal);
+                    }
+                    return 0.0;
+                default:
+                    return 0.0;
+            }
+        }
+
+        private static double NormalizeIntensity(double value)
+        {
+            if (double.IsNaN(value) || value <= 0.0) return 0.0;
+            return value > 1.0 ? Math.Clamp(value / 255.0, 0.0, 1.0) : value;
         }
 
         private void OnWatchdogTick(object? state)

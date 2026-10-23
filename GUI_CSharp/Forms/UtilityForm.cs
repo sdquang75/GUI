@@ -263,8 +263,10 @@ namespace GUI.Forms
             bool running = GoodbyeDpiEngine.IsRunning();
             if (running)
             {
-                var activePreset = GoodbyeDpiEngine.GetActivePreset();
-                _lblDpiStatus.Text = $"Running! [{activePreset.ShortLabel}]";
+                // Started outside GUI: its mode is unknown and it is not stopped on GUI exit, so don't claim either
+                _lblDpiStatus.Text = GoodbyeDpiEngine.IsStartedByThisSession
+                    ? $"Running! [{GoodbyeDpiEngine.GetActivePreset().ShortLabel}]"
+                    : "Running (started outside GUI)";
                 _lblDpiStatus.ForeColor = Color.FromArgb(22, 163, 74);
 
                 _btnToggleDpi.Text = "Disable GoodbyeDPI";

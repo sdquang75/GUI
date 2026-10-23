@@ -693,11 +693,19 @@ namespace GUI.Forms
             var unified = _vibrance as UnifiedVibranceEngine;
 
             int index = 1;
-            foreach (var m in DisplayTopology.GetDisplays())
+            var displays = DisplayTopology.GetDisplays();
+            foreach (var m in displays)
             {
                 string tech = unified != null
                     ? unified.DescribeTechnology(m)
                     : UnifiedVibranceEngine.DescribeNonNvidia(m.AdapterName);
+                // Only NVIDIA DVC is per monitor. The DWM filter (Intel / AMD / no NVAPI) changes every screen, so with
+                // a second screen say so here instead of letting "Apply to" promise vibrance on this monitor only.
+                // Gamma and black flash still use this monitor's hardware LUT.
+                if (displays.Count > 1 && tech.Contains("DWM", StringComparison.OrdinalIgnoreCase))
+                {
+                    tech += ": vibrance on all screens";
+                }
                 _cmbDisplayTarget.Items.Add(new MonitorItem
                 {
                     GdiName = m.GdiName,

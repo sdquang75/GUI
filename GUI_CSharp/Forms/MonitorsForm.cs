@@ -51,9 +51,9 @@ namespace GUI.Forms
                 BackColor = Color.White
             };
             _lvMonitors.Columns.Add("Monitor Name", 140);
-            _lvMonitors.Columns.Add("Role", 100);
-            _lvMonitors.Columns.Add("Status", 65);
-            _lvMonitors.Columns.Add("Device Instance ID", 140);
+            _lvMonitors.Columns.Add("Role", 95);
+            _lvMonitors.Columns.Add("Status", 90);
+            _lvMonitors.Columns.Add("Device Instance ID", 120);
             _lvMonitors.SelectedIndexChanged += (s, e) => UpdateButtonStates();
 
             _btnDisableSelected = new Button
@@ -121,8 +121,28 @@ namespace GUI.Forms
                 return;
             }
 
-            _btnDisableSelected.Enabled = m.Enabled;
+            _btnDisableSelected.Enabled = m.Enabled && !WouldLeaveNoScreen(m);
             _btnEnableSelected.Enabled = !m.Enabled;
+        }
+
+        // True when `m` is the last monitor actually showing the desktop: disabling it would leave no screen for the
+        // auto-revert countdown or the UAC prompt the revert needs (CM_Disable_DevNode without CM_DISABLE_PERSIST only
+        // lasts until the next restart, but until then there would be no picture at all). Counts monitors that show
+        // the desktop, not enabled devnodes: a closed laptop lid is still an enabled devnode but shows nothing.
+        private bool WouldLeaveNoScreen(MonitorInfo m) => m.IsActive && CountOtherActiveMonitors(m) == 0;
+
+        private int CountOtherActiveMonitors(MonitorInfo m)
+        {
+            int count = 0;
+            foreach (ListViewItem item in _lvMonitors.Items)
+            {
+                if (item.Tag is MonitorInfo other && other.IsActive &&
+                    !string.Equals(other.InstanceId, m.InstanceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         private void RefreshMonitors()
@@ -135,7 +155,7 @@ namespace GUI.Forms
             {
                 var item = new ListViewItem(m.FriendlyName);
                 item.SubItems.Add(m.IsPrimary ? "Primary (Main)" : "Secondary");
-                item.SubItems.Add(m.Enabled ? "Enabled" : "Disabled");
+                item.SubItems.Add(!m.Enabled ? "Disabled" : m.IsActive ? "Enabled" : "Enabled (idle)");
                 item.SubItems.Add(m.InstanceId);
                 item.Tag = m;
                 if (!m.Enabled)
@@ -173,6 +193,24 @@ namespace GUI.Forms
 
             if (!enable)
             {
+                if (WouldLeaveNoScreen(m))
+                {
+                    MessageBox.Show(this,
+                        "This is the only monitor showing the desktop. Disabling it would leave no screen to recover from (the auto-revert and its UAC prompt would not be visible).",
+                        "Action Not Allowed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (m.IsPrimary)
+                {
+                    var confirm = MessageBox.Show(this,
+                        $"'{m.FriendlyName}' is the primary monitor.\n\n" +
+                        "Windows will move the desktop and taskbar to another monitor. Re-enabling it may need a UAC prompt, " +
+                        "and it stays disabled until it is re-enabled or Windows restarts if the revert is not confirmed.\n\nDisable it anyway?",
+                        "Disable Primary Monitor", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                    if (confirm != DialogResult.Yes) return;
+                }
+
                 var (ok, msg) = MonitorEngine.SetMonitorEnabled(m.InstanceId, false);
                 if (!ok)
                 {

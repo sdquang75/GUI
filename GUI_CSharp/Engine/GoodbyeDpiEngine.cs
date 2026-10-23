@@ -94,6 +94,13 @@ namespace GUI.Engine
         private static EventWaitHandle? _stopEvent;
         private static EventWaitHandle? _reloadEvent;
 
+        // True while the goodbyedpi that runs was started (or restarted / taken over with a watchdog) by this GUI
+        // session. "Stops automatically on GUI exit" applies only to that one: an instance the user started outside
+        // the GUI is left alone on exit instead of being killed (or waited on for a watchdog that does not exist).
+        private static volatile bool _startedBySession;
+
+        public static bool IsStartedByThisSession => _startedBySession && IsRunning();
+
         private static string GetStopEventName(int parentPid) => $"Local\\GUI_GoodbyeDPI_Stop_{parentPid}";
         private static string GetReloadEventName(int parentPid) => $"Local\\GUI_GoodbyeDPI_Reload_{parentPid}";
 
@@ -267,29 +274,93 @@ namespace GUI.Engine
                 EnsureEventsInitialized(currentPid);
                 if (IsRunning())
                 {
-                    return (true, $"GoodbyeDPI is already running ({preset.ShortLabel}).");
+                    return _startedBySession
+                        ? (true, $"GoodbyeDPI is already running ({preset.ShortLabel}).")
+                        : (true, "GoodbyeDPI is already running outside GUI; it will keep running after GUI exits.");
                 }
             }
             else
             {
                 if (!IsRunning())
                 {
+                    _startedBySession = false;
                     return (true, "GoodbyeDPI is already stopped.");
                 }
 
-                // First try signaling the elevated watchdog owned by this GUI session (no UAC needed)
-                if (TrySignalWatchdogStop())
+                // First try signaling the elevated watchdog owned by this GUI session (no UAC needed).
+                // Without one (started outside GUI) that would only wait 2.5s for nothing.
+                if (_startedBySession && TrySignalWatchdogStop())
                 {
+                    _startedBySession = false;
                     return (true, "GoodbyeDPI stopped successfully.");
                 }
             }
 
+            (bool Success, string Message) result;
             if (MonitorEngine.IsAdministrator())
             {
-                return SetEnabledDirect(enable, currentPid, preset.Id);
+                result = SetEnabledDirect(enable, currentPid, preset.Id);
+            }
+            else
+            {
+                var (ok, msg) = RunElevatedHelper(enable ? "start" : "stop", currentPid, preset.Id);
+                result = !ok
+                    ? (false, msg)
+                    : (true, enable ? $"GoodbyeDPI started ({preset.ShortLabel})." : "GoodbyeDPI stopped successfully.");
             }
 
-            // Elevate via self helper (--goodbyedpi-op start|stop <parentPid> <modeId>) so no console window flashes
+            if (result.Success) _startedBySession = enable;
+            return result;
+        }
+
+        public static (bool Success, string Message) SwitchModeIfRunning(string modeId)
+        {
+            var preset = GetPreset(modeId);
+            SaveActiveModeId(preset.Id);
+
+            if (!IsRunning())
+            {
+                return (true, $"Ready ({preset.ShortLabel})");
+            }
+
+            int currentPid = Environment.ProcessId;
+            EnsureEventsInitialized(currentPid);
+
+            // 1. Signal the elevated watchdog to reload goodbyedpi.exe with the new mode (no UAC prompt)
+            if (_startedBySession && TrySignalWatchdogReload())
+            {
+                return (true, $"Switched active mode to {preset.ShortLabel}.");
+            }
+
+            // 2. No watchdog handled it (e.g. goodbyedpi started outside this session): restart it ourselves.
+            // The restarted process gets this session's watchdog, so from here on it stops on GUI exit.
+            var result = MonitorEngine.IsAdministrator()
+                ? RestartDirect(currentPid, preset.Id)
+                : RunElevatedHelper("restart", currentPid, preset.Id);
+            if (!result.Success) return result;
+
+            _startedBySession = true;
+            return (true, $"Switched active mode to {preset.ShortLabel}.");
+        }
+
+        // Replaces the running goodbyedpi with one in the given mode and attaches a watchdog to this GUI session
+        public static (bool Success, string Message) RestartDirect(int parentPid, string? modeId)
+        {
+            var preset = string.IsNullOrWhiteSpace(modeId) ? GetActivePreset() : GetPreset(modeId);
+            SaveActiveModeId(preset.Id);
+            KillGoodbyeDpiProcessOnly();
+
+            if (!StartGoodbyeDpiProcess(preset, out string err))
+            {
+                return (false, err);
+            }
+            if (parentPid > 0) SpawnWatchdog(parentPid);
+            return (true, $"GoodbyeDPI restarted ({preset.ShortLabel}).");
+        }
+
+        // Runs this exe elevated as "--goodbyedpi-op <op> <parentPid> <modeId>" (no console window flashes)
+        private static (bool Success, string Message) RunElevatedHelper(string op, int parentPid, string modeId)
+        {
             try
             {
                 string? selfExe = Environment.ProcessPath;
@@ -301,7 +372,7 @@ namespace GUI.Engine
                 var psi = new ProcessStartInfo
                 {
                     FileName = selfExe,
-                    Arguments = $"--goodbyedpi-op {(enable ? "start" : "stop")} {currentPid} {preset.Id}",
+                    Arguments = $"--goodbyedpi-op {op} {parentPid} {modeId}",
                     Verb = "runas",
                     UseShellExecute = true,
                     CreateNoWindow = true,
@@ -319,13 +390,9 @@ namespace GUI.Engine
                     return (false, "Operation timed out waiting for elevated helper.");
                 }
 
-                if (proc.ExitCode == 0)
-                {
-                    return (true, enable
-                        ? $"GoodbyeDPI started ({preset.ShortLabel})."
-                        : "GoodbyeDPI stopped successfully.");
-                }
-                return (false, $"Operation failed (exit code {proc.ExitCode}).");
+                return proc.ExitCode == 0
+                    ? (true, "")
+                    : (false, $"Operation failed (exit code {proc.ExitCode}).");
             }
             catch (System.ComponentModel.Win32Exception wEx) when (wEx.NativeErrorCode == 1223)
             {
@@ -335,35 +402,6 @@ namespace GUI.Engine
             {
                 return (false, $"Administrator permission required: {ex.Message}");
             }
-        }
-
-        public static (bool Success, string Message) SwitchModeIfRunning(string modeId)
-        {
-            var preset = GetPreset(modeId);
-            SaveActiveModeId(preset.Id);
-
-            if (!IsRunning())
-            {
-                return (true, $"Ready ({preset.ShortLabel})");
-            }
-
-            int currentPid = Environment.ProcessId;
-            EnsureEventsInitialized(currentPid);
-
-            // 1. Signal the elevated watchdog to reload goodbyedpi.exe with the new mode (no UAC prompt)
-            if (TrySignalWatchdogReload())
-            {
-                return (true, $"Switched active mode to {preset.ShortLabel}.");
-            }
-
-            // 2. Fallback if running as admin directly
-            if (MonitorEngine.IsAdministrator())
-            {
-                KillGoodbyeDpiProcessOnly();
-                return SetEnabledDirect(true, currentPid, preset.Id);
-            }
-
-            return (false, "Restart GoodbyeDPI to apply the new mode.");
         }
 
         private static void EnsureEventsInitialized(int pid)
@@ -429,6 +467,8 @@ namespace GUI.Engine
                     var oldPids = GetRunningProcessIds();
                     _reloadEvent.Set();
 
+                    // Success only once a watchdog really replaced the process: with no watchdog listening, the old
+                    // goodbyedpi keeps running in the old mode and "still running" must not read as "switched".
                     var sw = Stopwatch.StartNew();
                     while (sw.ElapsedMilliseconds < 4000)
                     {
@@ -440,7 +480,11 @@ namespace GUI.Engine
                             return IsRunning();
                         }
                     }
-                    return IsRunning();
+
+                    // Nobody consumed it: clear it so a watchdog started later does not reload out of the blue
+                    _reloadEvent.Reset();
+                    Program.Log("GoodbyeDpiEngine: reload signal not handled (no watchdog for this session).");
+                    return false;
                 }
             }
             catch { }
@@ -488,6 +532,12 @@ namespace GUI.Engine
             {
                 if (!IsRunning())
                 {
+                    return;
+                }
+
+                if (!_startedBySession)
+                {
+                    Program.Log("GoodbyeDPI was started outside GUI -> left running on exit.");
                     return;
                 }
 
