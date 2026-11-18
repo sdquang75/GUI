@@ -55,6 +55,8 @@ namespace GUI.Engine.Audio
         private int _lookaheadMs;
         private float _ceiling;
         private volatile LookaheadLimiter? _limiter;
+        private volatile FootstepEq? _eq;
+        private FootstepEqSettings _eqSettings = FootstepEqSettings.Off;
 
         private ManualResetEventSlim? _ready;
         private volatile bool _initOk;
@@ -69,7 +71,7 @@ namespace GUI.Engine.Audio
         /// never routes the game into a cable nobody reads. Calling it again with the same devices only updates the
         /// ceiling live (no restart, no gap).
         /// </summary>
-        public bool Start(string captureDeviceId, string renderDeviceId, float ceiling, int lookaheadMs)
+        public bool Start(string captureDeviceId, string renderDeviceId, float ceiling, int lookaheadMs, FootstepEqSettings eq)
         {
             lock (_lock)
             {
@@ -83,6 +85,8 @@ namespace GUI.Engine.Audio
                 {
                     _ceiling = ceiling;
                     _limiter?.SetParameters(ceiling, ReleaseMs);
+                    _eqSettings = eq;
+                    _eq?.SetSettings(eq);
                     return true;
                 }
 
@@ -92,6 +96,7 @@ namespace GUI.Engine.Audio
                 _renderId = renderDeviceId;
                 _lookaheadMs = lookaheadMs;
                 _ceiling = ceiling;
+                _eqSettings = eq;
                 _initOk = false;
                 _ready = new ManualResetEventSlim(false);
 
@@ -117,7 +122,7 @@ namespace GUI.Engine.Audio
                     return false;
                 }
 
-                Program.Log($"[LookaheadDsp] Started (capture={captureDeviceId}, render={renderDeviceId}, ceiling={ceiling:P0}, lookahead={lookaheadMs}ms, hold={HoldMs}ms, release={ReleaseMs}ms)");
+                Program.Log($"[LookaheadDsp] Started (capture={captureDeviceId}, render={renderDeviceId}, ceiling={ceiling:P0}, lookahead={lookaheadMs}ms, hold={HoldMs}ms, release={ReleaseMs}ms, footstep EQ={(eq.Enabled ? $"+{eq.PresenceDb}dB{(eq.CutRumble ? " rumble cut" : "")}" : "off")})");
                 return true;
             }
         }
@@ -137,6 +142,7 @@ namespace GUI.Engine.Audio
             try { _thread?.Join(1000); } catch { }
             _thread = null;
             _limiter = null;
+            _eq = null;
             _ready?.Dispose();
             _ready = null;
 
@@ -237,6 +243,9 @@ namespace GUI.Engine.Audio
 
                 var limiter = new LookaheadLimiter(ch, rate, _lookaheadMs, _ceiling, ReleaseMs, HoldMs);
                 _limiter = limiter;
+                // Footstep EQ before the limiter: whatever it lifts, the ceiling still holds
+                var eqFilter = new FootstepEq(ch, rate, _eqSettings);
+                _eq = eqFilter;
 
                 var fifo = new float[rate * ch]; // 1 s
                 int fifoCapFrames = rate;
@@ -293,6 +302,7 @@ namespace GUI.Engine.Audio
                             Marshal.Copy(pData, scratch, 0, samples);
                         captureService.ReleaseBuffer(numFrames);
 
+                        eqFilter.Process(scratch.AsSpan(0, samples));
                         limiter.Process(scratch.AsSpan(0, samples));
 
                         // Push; on overflow the oldest audio goes (only if the DAC stalled for a full second)

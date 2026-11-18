@@ -71,6 +71,16 @@ namespace GUI.Config
         [JsonPropertyName("sound_lock_lookahead_ms")]
         public int SoundLockLookaheadMs { get; set; } = 5;
 
+        // Footstep clarity EQ (before the limiter): rumble cut, mud cut, +presence dB around 3 kHz
+        [JsonPropertyName("sound_lock_eq_enabled")]
+        public bool SoundLockEqEnabled { get; set; } = false;
+
+        [JsonPropertyName("sound_lock_eq_presence_db")]
+        public int SoundLockEqPresenceDb { get; set; } = 4;
+
+        [JsonPropertyName("sound_lock_eq_cut_rumble")]
+        public bool SoundLockEqCutRumble { get; set; } = true;
+
         [JsonPropertyName("sound_lock_output_device_id")]
         public string? SoundLockOutputDeviceId { get; set; } = null;
     }

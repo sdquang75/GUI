@@ -42,6 +42,10 @@ namespace GUI.Forms
         private TrackBar _tbLimit;
         private Label _lblLimitVal;
         private CheckBox _chkBalanceApps;
+        private CheckBox _chkEq;
+        private CheckBox _chkEqRumble;
+        private Label _lblEqVal;
+        private TrackBar _tbEq;
 
         // Output Device & Virtual Audio Cable routing controls
         private Label _lblOutputDevicePrompt;
@@ -118,7 +122,7 @@ namespace GUI.Forms
 
             // Both columns end at the same Y; the bottom bar sits below them
             const int trackH = 32; // TrackBar ignores Size.Height unless AutoSize = false (default 45px overlaps the next row)
-            int soundLockH = isCs2 ? 470 : 394;
+            int soundLockH = isCs2 ? 526 : 450;
             int columnBottom = 12 + soundLockH;
             int separatorY = columnBottom + 10;
             int btnY = separatorY + 10;
@@ -141,7 +145,7 @@ namespace GUI.Forms
             // ==========================================
 
             // Group 1: In-game Vibrance Level
-            // Left heights add up to soundLockH (8px gaps): CS2 = 92+104+104+146 + 24, others = 100+139+139 + 16
+            // Left heights add up to soundLockH (8px gaps): CS2 = 92+118+118+174 + 24, others = 100+167+167 + 16
             int vibH = isCs2 ? 92 : 100;
             var gbVib = new GroupBox
             {
@@ -181,7 +185,7 @@ namespace GUI.Forms
 
             // Group 2: Gamma Setting
             int gammaY = 12 + vibH + 8;
-            int gammaH = isCs2 ? 104 : 139;
+            int gammaH = isCs2 ? 118 : 167;
             var gbGamma = new GroupBox
             {
                 Text = "Gamma Setting",
@@ -316,7 +320,7 @@ namespace GUI.Forms
                 {
                     Text = "CS2 Anti-Flashbang",
                     Location = new Point(leftColX, boostY + boostH + 8),
-                    Size = new Size(colWidth, 146),
+                    Size = new Size(colWidth, 174),
                     Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
                 };
 
@@ -493,10 +497,49 @@ namespace GUI.Forms
                 _lblLimitVal.Text = $"{_tbLimit.Value}%";
             };
 
+            // Footstep clarity EQ: lifts the 3 kHz footstep band and trims rumble / mud, so footsteps stand out without
+            // raising everything with the master volume
+            _chkEq = new CheckBox
+            {
+                Text = "Footstep clarity EQ",
+                Location = new Point(12, 192),
+                AutoSize = true
+            };
+            _chkEq.CheckedChanged += (s, e) => UpdateSoundLockControlsEnabled();
+
+            _chkEqRumble = new CheckBox
+            {
+                Text = "Cut rumble",
+                Location = new Point(156, 192),
+                AutoSize = true,
+                Checked = true
+            };
+
+            _lblEqVal = new Label
+            {
+                Text = "+4 dB",
+                Location = new Point(246, 190),
+                Size = new Size(70, 20),
+                TextAlign = ContentAlignment.MiddleRight,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
+            };
+
+            _tbEq = new TrackBar
+            {
+                Minimum = 0,
+                Maximum = 8,
+                Value = 4,
+                TickFrequency = 1,
+                AutoSize = false,
+                Location = new Point(10, 212),
+                Size = new Size(308, trackH)
+            };
+            _tbEq.ValueChanged += (s, e) => _lblEqVal.Text = $"+{_tbEq.Value} dB";
+
             _chkBalanceApps = new CheckBox
             {
                 Text = "Keep other apps (Discord) at desktop loudness",
-                Location = new Point(12, 196),
+                Location = new Point(12, 252),
                 Size = new Size(304, 20),
                 Checked = true
             };
@@ -504,7 +547,7 @@ namespace GUI.Forms
             // Audio Routing Separator
             var pnlAudioSep = new Panel
             {
-                Location = new Point(10, 240),
+                Location = new Point(10, 296),
                 Size = new Size(308, 1),
                 BackColor = Color.FromArgb(226, 232, 240)
             };
@@ -512,7 +555,7 @@ namespace GUI.Forms
             _lblOutputDevicePrompt = new Label
             {
                 Text = "Output Device (DAC / Headset):",
-                Location = new Point(12, 248),
+                Location = new Point(12, 304),
                 Size = new Size(304, 18),
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold, GraphicsUnit.Point),
                 ForeColor = Color.FromArgb(30, 58, 138)
@@ -520,7 +563,7 @@ namespace GUI.Forms
 
             _cmbOutputDevice = new ComboBox
             {
-                Location = new Point(10, 268),
+                Location = new Point(10, 324),
                 Size = new Size(308, 24),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
@@ -529,7 +572,7 @@ namespace GUI.Forms
             _lblCableStatus = new Label
             {
                 Text = "Checking Virtual Cable...",
-                Location = new Point(12, 300),
+                Location = new Point(12, 356),
                 Size = new Size(202, 26),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
@@ -538,7 +581,7 @@ namespace GUI.Forms
             _btnSetupCable = new Button
             {
                 Text = "Setup Cable",
-                Location = new Point(216, 299),
+                Location = new Point(216, 355),
                 Size = new Size(102, 28),
                 BackColor = Color.White,
                 FlatStyle = FlatStyle.System,
@@ -564,6 +607,10 @@ namespace GUI.Forms
             gbSoundLock.Controls.Add(_lblLimitPrompt);
             gbSoundLock.Controls.Add(_lblLimitVal);
             gbSoundLock.Controls.Add(_tbLimit);
+            gbSoundLock.Controls.Add(_chkEq);
+            gbSoundLock.Controls.Add(_chkEqRumble);
+            gbSoundLock.Controls.Add(_lblEqVal);
+            gbSoundLock.Controls.Add(_tbEq);
             gbSoundLock.Controls.Add(_chkBalanceApps);
             gbSoundLock.Controls.Add(pnlAudioSep);
             gbSoundLock.Controls.Add(_lblOutputDevicePrompt);
@@ -576,7 +623,7 @@ namespace GUI.Forms
                 // CS2 Extra Height: Professional Hardware Protection & Status Panel
                 var pnlDacInfo = new Panel
                 {
-                    Location = new Point(10, 334),
+                    Location = new Point(10, 390),
                     Size = new Size(308, 126),
                     BackColor = Color.FromArgb(238, 242, 248),
                     BorderStyle = BorderStyle.FixedSingle
@@ -613,7 +660,7 @@ namespace GUI.Forms
 
                 var lblDac3 = new Label
                 {
-                    Text = "• Below the ceiling: untouched (no boost / EQ)",
+                    Text = "• Below the ceiling: untouched unless EQ is on",
                     Location = new Point(8, 68),
                     Size = new Size(290, 16),
                     Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point),
@@ -651,7 +698,7 @@ namespace GUI.Forms
             {
                 var pnlDacInfo = new Panel
                 {
-                    Location = new Point(10, 334),
+                    Location = new Point(10, 390),
                     Size = new Size(308, 50),
                     BackColor = Color.FromArgb(238, 242, 248),
                     BorderStyle = BorderStyle.FixedSingle
@@ -776,6 +823,11 @@ namespace GUI.Forms
             _tbLimit.Enabled = masterOn;
 
             _chkBalanceApps.Enabled = masterOn;
+            _chkEq.Enabled = masterOn;
+            bool eqOn = masterOn && _chkEq.Checked;
+            _chkEqRumble.Enabled = eqOn;
+            _lblEqVal.Enabled = eqOn;
+            _tbEq.Enabled = eqOn;
 
             _lblOutputDevicePrompt.Enabled = masterOn;
             _cmbOutputDevice.Enabled = masterOn;
@@ -913,6 +965,11 @@ namespace GUI.Forms
             _lblLimitVal.Text = $"{_tbLimit.Value}%";
 
             _chkBalanceApps.Checked = _profile.SoundLockBalanceExternalApps;
+            _chkEq.Checked = _profile.SoundLockEqEnabled;
+            _chkEqRumble.Checked = _profile.SoundLockEqCutRumble;
+            int eqDb = Math.Clamp(_profile.SoundLockEqPresenceDb, 0, 8);
+            _tbEq.Value = eqDb;
+            _lblEqVal.Text = $"+{eqDb} dB";
 
             RefreshAudioEndpoints();
             UpdateSoundLockControlsEnabled();
@@ -1204,6 +1261,9 @@ namespace GUI.Forms
                 SoundLockGameVolume = _tbGameVol.Value,
                 SoundLockThreshold = _tbLimit.Value,
                 SoundLockBalanceExternalApps = _chkBalanceApps.Checked,
+                SoundLockEqEnabled = _chkEq.Checked,
+                SoundLockEqPresenceDb = _tbEq.Value,
+                SoundLockEqCutRumble = _chkEqRumble.Checked,
                 SoundLockFastRecovery = true, // release is fixed at the shortest clean value
                 SoundLockLookaheadMs = 5,
                 SoundLockOutputDeviceId = outDevId

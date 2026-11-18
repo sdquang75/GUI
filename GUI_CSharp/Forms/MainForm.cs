@@ -1072,7 +1072,8 @@ namespace GUI.Forms
             float gameVolume = Math.Clamp(prof.SoundLockGameVolume > 0 ? prof.SoundLockGameVolume : 70, 1, 100) / 100.0f;
             int lookaheadMs = prof.SoundLockLookaheadMs > 0 ? prof.SoundLockLookaheadMs : 5;
 
-            if (!EnsureLimiter(exe, pid, prof.SoundLockOutputDeviceId, ceiling, lookaheadMs))
+            var eq = new FootstepEqSettings(prof.SoundLockEqEnabled, prof.SoundLockEqPresenceDb, prof.SoundLockEqCutRumble);
+            if (!EnsureLimiter(exe, pid, prof.SoundLockOutputDeviceId, ceiling, lookaheadMs, eq))
             {
                 // No ceiling possible -> no raised volume either; the game plays as if Sound Lock were off
                 StopSoundLock(keepRoutingMarker: false);
@@ -1085,7 +1086,7 @@ namespace GUI.Forms
             CheckGameAudioPath();
         }
 
-        private bool EnsureLimiter(string exe, int pid, string? preferredOutputId, float ceiling, int lookaheadMs)
+        private bool EnsureLimiter(string exe, int pid, string? preferredOutputId, float ceiling, int lookaheadMs, FootstepEqSettings eq)
         {
             if (_dspFaulted) return false;
 
@@ -1104,7 +1105,7 @@ namespace GUI.Forms
 
             // Pipeline first, routing second: the game must never land in a cable nobody reads.
             // Same devices -> only the ceiling is updated live, no restart.
-            if (!_lookaheadDspEngine.Start(cableCaptureId!, outputId, ceiling, lookaheadMs))
+            if (!_lookaheadDspEngine.Start(cableCaptureId!, outputId, ceiling, lookaheadMs, eq))
             {
                 Program.Log("[AudioRouting] Lookahead pipeline could not start -> Sound Lock inactive.");
                 return false;

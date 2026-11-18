@@ -219,7 +219,8 @@ namespace GUI.Engine.Audio
                 if (col.Item(i, out var dev) != 0 || dev == null) continue;
                 if (!string.Equals(GetDeviceInterfaceName(dev), CableInterfaceName, StringComparison.OrdinalIgnoreCase)) continue;
                 string name = GetDeviceFriendlyName(dev);
-                if (name.Contains("16ch", StringComparison.OrdinalIgnoreCase)) continue;
+                // "CABLE In 16ch" / "CABLE In 16 Ch" depending on the driver version
+                if (name.Replace(" ", "").Contains("16ch", StringComparison.OrdinalIgnoreCase)) continue;
                 dev.GetId(out string id);
                 if (name.Contains(wantedName, StringComparison.OrdinalIgnoreCase)) return id;
                 fallback ??= id;
