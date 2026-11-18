@@ -3,7 +3,8 @@ echo Stopping existing GUI process if running...
 taskkill /F /IM GUI.exe >nul 2>&1
 
 echo Building single-file GUI.exe...
-dotnet publish GUI_CSharp/GUI.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish_out
+rem ReadyToRun: precompiled code, so startup (autostart) and the first CS2 flash packet do not wait for the JIT
+dotnet publish GUI_CSharp/GUI.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:PublishReadyToRun=true -o publish_out
 
 if %ERRORLEVEL% equ 0 (
     move /Y publish_out\GUI.exe GUI.exe >nul

@@ -112,6 +112,7 @@ namespace GUI.Engine
                 // normal-priority pool work can wait several ms for a core, which is felt as a late black flash.
                 new Thread(() => ReceiveLoop(session)) { IsBackground = true, Name = "CS2 GSI receive", Priority = ThreadPriority.Highest }.Start();
                 new Thread(() => ApplyLoop(session)) { IsBackground = true, Name = "CS2 GSI apply", Priority = ThreadPriority.Highest }.Start();
+                ThreadPool.QueueUserWorkItem(_ => WarmUp());
             }
             catch (Exception ex)
             {
@@ -395,85 +396,34 @@ namespace GUI.Engine
         {
             state = default;
             bool shouldNotify = false;
-            double notifyFlashed = 0.0;
-            double notifySmoked = 0.0;
-            bool notifyActive = true;
-            string? notifyRawFlashed = null;
 
             lock (_syncLock)
             {
                 try
                 {
-                    string? providerSteamId = null;
-                    if (root.TryGetProperty("provider", out var provElem) &&
-                        provElem.TryGetProperty("steamid", out var pSteamElem))
-                    {
-                        providerSteamId = pSteamElem.GetString();
-                    }
-
                     _lastPacketTime = DateTime.UtcNow;
 
-                    if (!_hasLoggedFirstConnection && !string.IsNullOrEmpty(providerSteamId))
+                    if (!_hasLoggedFirstConnection &&
+                        root.TryGetProperty("provider", out var provElem) &&
+                        provElem.TryGetProperty("steamid", out var pSteamElem))
                     {
                         _hasLoggedFirstConnection = true;
-                        Program.Log($"Cs2GsiListener: Connected to CS2 (SteamID: {providerSteamId})");
+                        Program.Log($"Cs2GsiListener: Connected to CS2 (SteamID: {pSteamElem.GetString()})");
                     }
 
                     // CRITICAL: If this packet is purely map/round/heartbeat info without player state,
                     // do not falsely overwrite player's flashed status with 0!
-                    if (!root.TryGetProperty("player", out var playerElem) ||
-                        !playerElem.TryGetProperty("state", out var stateElem))
+                    if (!TryReadPlayerState(root, out double flashedFraction, out double smokedFraction, out string? rawFlashed))
                     {
                         return false;
                     }
 
-                    string? playerSteamId = null;
-                    if (playerElem.TryGetProperty("steamid", out var playerSteamElem))
-                    {
-                        playerSteamId = playerSteamElem.GetString();
-                    }
-
-                    double flashedFraction = 0.0;
-                    double smokedFraction = 0.0;
-                    int health = 100;
-                    string? rawFlashed = null;
-
-                    if (stateElem.TryGetProperty("flashed", out var flashedElem))
-                    {
-                        rawFlashed = flashedElem.GetRawText();
-                        flashedFraction = ParseIntensity(flashedElem);
-                    }
-
-                    if (stateElem.TryGetProperty("smoked", out var smokedElem))
-                    {
-                        smokedFraction = ParseIntensity(smokedElem);
-                    }
-
-                    if (stateElem.TryGetProperty("health", out var healthElem))
-                    {
-                        if (healthElem.ValueKind == JsonValueKind.Number && healthElem.TryGetInt32(out int hVal))
-                        {
-                            health = hVal;
-                        }
-                        else if (healthElem.ValueKind == JsonValueKind.String && int.TryParse(healthElem.GetString(), out int hsVal))
-                        {
-                            health = hsVal;
-                        }
-                    }
-
                     // Always enable Black Flash even when dead (health == 0) or spectating others
-                    double effectiveFlashed = flashedFraction;
-                    double effectiveSmoked = smokedFraction;
-                    bool isActive = true;
-
-                    _lastFlashed = effectiveFlashed;
-                    _lastSmoked = effectiveSmoked;
+                    _lastFlashed = flashedFraction;
+                    _lastSmoked = smokedFraction;
                     _lastFlashUpdateTime = DateTime.UtcNow;
 
-                    notifyFlashed = effectiveFlashed;
-                    notifySmoked = effectiveSmoked;
-                    notifyActive = isActive;
-                    notifyRawFlashed = rawFlashed;
+                    state = new GsiState(flashedFraction, smokedFraction, true, rawFlashed);
                     shouldNotify = true;
                 }
                 catch (JsonException) { }
@@ -483,32 +433,71 @@ namespace GUI.Engine
                 }
             }
 
-            if (shouldNotify)
-            {
-                state = new GsiState(notifyFlashed, notifySmoked, notifyActive, notifyRawFlashed);
-            }
             return shouldNotify;
         }
 
-        // CS2 sends "flashed" / "smoked" as integers 0-255, so an integer is always a 0-255 level: the tail of a flash
-        // reports 1 (= 1/255), which must not be read as a 1.0 fraction (full black). Only a non-integer number is
-        // taken as an already normalized 0.0-1.0 fraction.
+        // player.state of a packet, without touching any listener state (also used by the warm-up).
+        // rawFlashed is only extracted when logging is on: it is an extra string per packet just for the log line.
+        private static bool TryReadPlayerState(JsonElement root, out double flashed, out double smoked, out string? rawFlashed)
+        {
+            flashed = 0.0;
+            smoked = 0.0;
+            rawFlashed = null;
+            if (!root.TryGetProperty("player", out var playerElem) ||
+                !playerElem.TryGetProperty("state", out var stateElem))
+            {
+                return false;
+            }
+
+            if (stateElem.TryGetProperty("flashed", out var flashedElem))
+            {
+                if (Program.EnableLogging) rawFlashed = flashedElem.GetRawText();
+                flashed = ParseIntensity(flashedElem);
+            }
+
+            if (stateElem.TryGetProperty("smoked", out var smokedElem))
+            {
+                smoked = ParseIntensity(smokedElem);
+            }
+            return true;
+        }
+
+        // A sample request run through the header / JSON parsing once at start, so the first real flash packet
+        // does not wait for JIT and JSON reader setup on the time-critical threads. No state or event is touched.
+        private static readonly byte[] WarmUpRequest = Encoding.ASCII.GetBytes(
+            "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n");
+        private static readonly byte[] WarmUpBody = Encoding.UTF8.GetBytes(
+            "{\"provider\":{\"steamid\":\"0\"},\"player\":{\"state\":{\"health\":100,\"flashed\":128,\"smoked\":0,\"burning\":0}}," +
+            "\"previously\":{\"player\":{\"state\":{\"flashed\":255}}}}");
+
+        private static void WarmUp()
+        {
+            try
+            {
+                int headerEnd = WarmUpRequest.AsSpan().IndexOf(HeaderTerminator);
+                TryParseHead(WarmUpRequest.AsSpan(0, headerEnd), out _, out _, out _);
+                for (int i = 0; i < 3; i++)
+                {
+                    using var doc = JsonDocument.Parse(new ReadOnlyMemory<byte>(WarmUpBody));
+                    TryReadPlayerState(doc.RootElement, out _, out _, out _);
+                }
+            }
+            catch { }
+        }
+
+        // Parses flash / smoke intensity from CS2 GSI payload.
+        // Handles 0-255 scales (e.g. 255 -> 1.0), normalized scales (e.g. 0.5 -> 0.5), and binary flags (1 -> 1.0, 0 -> 0.0).
         private static double ParseIntensity(JsonElement elem)
         {
             switch (elem.ValueKind)
             {
                 case JsonValueKind.Number:
-                    if (elem.TryGetInt64(out long iVal)) return Math.Clamp(iVal / 255.0, 0.0, 1.0);
                     if (elem.TryGetDouble(out double dVal)) return NormalizeIntensity(dVal);
                     return 0.0;
                 case JsonValueKind.True:
                     return 1.0;
                 case JsonValueKind.String:
                     string? s = elem.GetString();
-                    if (long.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out long isVal))
-                    {
-                        return Math.Clamp(isVal / 255.0, 0.0, 1.0);
-                    }
                     if (double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double dsVal))
                     {
                         return NormalizeIntensity(dsVal);

@@ -72,7 +72,8 @@ namespace GUI.Utils
         private string? _deliveredExe;
         private int _deliveredPid;
 
-        public event Action<string?, int>? ForegroundAppChanged;
+        // (exe name, process id, foreground window): the window tells which monitor the app is on
+        public event Action<string?, int, IntPtr>? ForegroundAppChanged;
 
         public bool IsRunning => _foregroundHook != IntPtr.Zero;
 
@@ -247,11 +248,13 @@ namespace GUI.Utils
             {
                 string? exe;
                 int pid;
+                IntPtr hwnd;
                 lock (_lock)
                 {
                     if (!IsRunning) return;
                     exe = _lastProcessExe;
                     pid = _lastProcessId;
+                    hwnd = _lastHwnd;
                 }
 
                 // A later sample already announced this app (or a newer one replaced it before we got here)
@@ -259,7 +262,7 @@ namespace GUI.Utils
 
                 _deliveredExe = exe;
                 _deliveredPid = pid;
-                ForegroundAppChanged?.Invoke(exe, pid);
+                ForegroundAppChanged?.Invoke(exe, pid, hwnd);
             }
         }
 

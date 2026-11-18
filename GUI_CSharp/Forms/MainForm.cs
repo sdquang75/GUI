@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using GUI.Config;
 using GUI.Engine;
+using GUI.Engine.Audio;
 using GUI.Utils;
 using Microsoft.Win32;
 
@@ -35,11 +36,14 @@ namespace GUI.Forms
         private GammaEngine _gammaEngine;
         private ActiveWindowObserver _observer;
         private Cs2GsiListener _gsiListener;
+        private readonly SessionSoundLockEngine _soundLockEngine = new();
+        private readonly LookaheadDspEngine _lookaheadDspEngine = new();
         private EventWaitHandle? _showWindowEvent;
         private RegisteredWaitHandle? _showWindowWaitHandle;
 
         // --- Left Panel: Vibrance & Games ---
         private CheckBox _chkAutostart;
+        private CheckBox _chkGameMonitorOnly;
         private TrackBar _tbDesktopVib;
         private Label _lblDesktopVibVal;
         private Button _btnAdd;
@@ -55,7 +59,11 @@ namespace GUI.Forms
         // Written on the UI thread only; volatile because the GSI threads read it on every packet
         private volatile string? _currentGameExe = null;
         private int _currentGamePid = 0;
-        // Profile in use, re-applied (with its saved monitor) after a display topology change
+        // Window the observer reported for the running game (UI thread only): tells which monitor it is on
+        private IntPtr _currentGameHwnd = IntPtr.Zero;
+        // Resets to the desktop the moment the current game's process exits (null: polled by _gammaEnforceTimer)
+        private ProcessExitWatcher? _gameExitWatcher;
+        // Profile in use, re-applied after a display topology change or a change of the monitor scope
         private GameProfile? _currentGameProfile = null;
         // Debounces WM_DISPLAYCHANGE bursts (HDMI plug/unplug, MUX switch) before re-enumerating displays
         private System.Windows.Forms.Timer? _displayChangeTimer;
@@ -73,7 +81,6 @@ namespace GUI.Forms
         private readonly Font _resBtnFontBold = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
         private Label _lblResStatus;
         private Button _btnOpenUtility;
-        private Button _btnOpenMonitors;
 
         private bool _startMinimized = false;
 
@@ -83,8 +90,6 @@ namespace GUI.Forms
             _config = ConfigManager.Load();
             _vibrance = new UnifiedVibranceEngine();
             _gammaEngine = new GammaEngine();
-            // Before anything can write a ramp (GSI starts below), so the calibration LUTs are what gets captured
-            _gammaEngine.CaptureOriginalRamps();
             _observer = new ActiveWindowObserver();
             _gsiListener = new Cs2GsiListener(_config.Cs2GsiPort);
             _gsiListener.StateUpdated += OnCs2GsiStateUpdated;
@@ -112,29 +117,8 @@ namespace GUI.Forms
             {
                 if (!_isCleanedUp && _currentGameExe != null)
                 {
-                    bool isRunning = false;
-                    if (_currentGamePid > 0)
-                    {
-                        try
-                        {
-                            using var proc = Process.GetProcessById(_currentGamePid);
-                            string expectedName = Path.GetFileNameWithoutExtension(_currentGameExe);
-                            isRunning = !proc.HasExited && string.Equals(proc.ProcessName, expectedName, StringComparison.OrdinalIgnoreCase);
-                        }
-                        catch
-                        {
-                            isRunning = false;
-                        }
-                    }
-                    else
-                    {
-                        string procName = Path.GetFileNameWithoutExtension(_currentGameExe);
-                        var procs = Process.GetProcessesByName(procName);
-                        isRunning = procs.Length > 0;
-                        foreach (var p in procs) { try { p.Dispose(); } catch { } }
-                    }
-
-                    if (!isRunning)
+                    // The exit watcher reports the exit itself; polling the process is only the fallback without one
+                    if (_gameExitWatcher == null && !IsCurrentGameRunning())
                     {
                         ResetToDesktop();
                         return;
@@ -237,6 +221,25 @@ namespace GUI.Forms
                 AutostartHelper.SetAutostart(_chkAutostart.Checked);
             };
 
+            _chkGameMonitorOnly = new CheckBox
+            {
+                Text = "Affect game monitor only",
+                Location = new Point(150, 20),
+                AutoSize = true
+            };
+            new ToolTip().SetToolTip(_chkGameMonitorOnly,
+                "When checked, game vibrance, gamma / black boost and CS2 black flash only change the monitor the game window is on;\n" +
+                "other screens keep the desktop look. (The Windows DWM fallback on Intel / AMD always covers every screen.)");
+            _chkGameMonitorOnly.CheckedChanged += (s, e) =>
+            {
+                if (_config.AffectGameMonitorOnly == _chkGameMonitorOnly.Checked) return;
+                _config.AffectGameMonitorOnly = _chkGameMonitorOnly.Checked;
+                ConfigManager.Save(_config);
+                // Move the running game's effect to the new scope right away
+                var prof = _currentGameProfile;
+                if (_currentGameExe != null && prof != null) ApplyGameProfile(_currentGameExe, prof);
+            };
+
             var gbWinVib = new GroupBox
             {
                 Text = "Windows Vibrance Level",
@@ -284,6 +287,7 @@ namespace GUI.Forms
             gbWinVib.Controls.Add(_tbDesktopVib);
             gbWinVib.Controls.Add(_lblDesktopVibVal);
             gbSettings.Controls.Add(_chkAutostart);
+            gbSettings.Controls.Add(_chkGameMonitorOnly);
             gbSettings.Controls.Add(gbWinVib);
 
             var gbProg = new GroupBox
@@ -426,12 +430,12 @@ namespace GUI.Forms
             this.Controls.Add(gbQuickRes);
 
             // ==========================================
-            // 3. BOTTOM RIGHT: "Utility" & "Monitors" buttons
+            // 3. BOTTOM RIGHT: "Utility" button
             // ==========================================
             _btnOpenUtility = new Button
             {
                 Text = "Utility",
-                Location = new Point(rightX + colW - 246, 462),
+                Location = new Point(rightX + colW - 120, 462),
                 Size = new Size(120, 28),
                 BackColor = Color.White,
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point),
@@ -443,22 +447,6 @@ namespace GUI.Forms
                 dlg.ShowDialog(this);
             };
             this.Controls.Add(_btnOpenUtility);
-
-            _btnOpenMonitors = new Button
-            {
-                Text = "Monitors",
-                Location = new Point(rightX + colW - 120, 462),
-                Size = new Size(120, 28),
-                BackColor = Color.White,
-                Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point),
-                FlatStyle = FlatStyle.System
-            };
-            _btnOpenMonitors.Click += (s, e) =>
-            {
-                using var dlg = new MonitorsForm();
-                dlg.ShowDialog(this);
-            };
-            this.Controls.Add(_btnOpenMonitors);
 
             // ==========================================
             // System Tray
@@ -556,7 +544,7 @@ namespace GUI.Forms
 
             if (m.Msg == WM_DISPLAYCHANGE)
             {
-                MonitorEngine.InvalidateMonitorCache();
+                DisplayTopology.Invalidate();
                 _displayChangeTimer?.Stop();
                 _displayChangeTimer?.Start();
                 if (this.Visible && !_startMinimized)
@@ -657,6 +645,7 @@ namespace GUI.Forms
         private void LoadConfigToUi()
         {
             _chkAutostart.Checked = _config.Autostart;
+            _chkGameMonitorOnly.Checked = _config.AffectGameMonitorOnly;
 
             int deskVib = Math.Clamp(_config.Desktop.Vibrance, 0, 100);
             _tbDesktopVib.Value = deskVib;
@@ -772,9 +761,7 @@ namespace GUI.Forms
                         Boost = existing.Boost,
                         Cs2AntiFlashEnabled = existing.Cs2AntiFlashEnabled,
                         Cs2AntiSmokeEnabled = existing.Cs2AntiSmokeEnabled,
-                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim,
-                        DisplayDevicePath = existing.DisplayDevicePath,
-                        DisplayName = existing.DisplayName
+                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim
                     };
                 }
                 else
@@ -792,7 +779,7 @@ namespace GUI.Forms
                     };
                 }
 
-                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine, _gsiListener);
+                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine, _gsiListener, _config.AffectGameMonitorOnly);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
                 {
                     lock (_gamesLock)
@@ -843,9 +830,7 @@ namespace GUI.Forms
                         Boost = existing.Boost,
                         Cs2AntiFlashEnabled = existing.Cs2AntiFlashEnabled,
                         Cs2AntiSmokeEnabled = existing.Cs2AntiSmokeEnabled,
-                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim,
-                        DisplayDevicePath = existing.DisplayDevicePath,
-                        DisplayName = existing.DisplayName
+                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim
                     };
                 }
                 else
@@ -863,7 +848,7 @@ namespace GUI.Forms
                     };
                 }
 
-                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine, _gsiListener);
+                using var configDlg = new GameConfigForm(exe, initialProfile, _vibrance, _gammaEngine, _gsiListener, _config.AffectGameMonitorOnly);
                 if (configDlg.ShowDialog(this) == DialogResult.OK)
                 {
                     lock (_gamesLock)
@@ -897,7 +882,7 @@ namespace GUI.Forms
 
                 if (!string.IsNullOrEmpty(exe) && prof != null)
                 {
-                    using var configDlg = new GameConfigForm(exe, prof, _vibrance, _gammaEngine, _gsiListener);
+                    using var configDlg = new GameConfigForm(exe, prof, _vibrance, _gammaEngine, _gsiListener, _config.AffectGameMonitorOnly);
                     if (configDlg.ShowDialog(this) == DialogResult.OK)
                     {
                         lock (_gamesLock)
@@ -953,7 +938,7 @@ namespace GUI.Forms
             _observer.Start();
         }
 
-        private void OnForegroundAppChanged(string? exeName, int pid)
+        private void OnForegroundAppChanged(string? exeName, int pid, IntPtr hwnd)
         {
             if (this.IsDisposed || _isCleanedUp || !this.IsHandleCreated) return;
 
@@ -977,7 +962,7 @@ namespace GUI.Forms
 
                     if (matchedExe != null && matchedProf != null)
                     {
-                        ApplyGameProfile(matchedExe, matchedProf, pid);
+                        ApplyGameProfile(matchedExe, matchedProf, pid, hwnd);
                     }
                     else if (_currentGameExe != null)
                     {
@@ -988,7 +973,7 @@ namespace GUI.Forms
             catch { }
         }
 
-        private void ApplyGameProfile(string exe, GameProfile prof, int pid = 0)
+        private void ApplyGameProfile(string exe, GameProfile prof, int pid = 0, IntPtr hwnd = default)
         {
             if (_isCleanedUp) return;
             _currentGameExe = exe;
@@ -997,9 +982,15 @@ namespace GUI.Forms
             {
                 _currentGamePid = pid;
             }
+            if (hwnd != IntPtr.Zero)
+            {
+                _currentGameHwnd = hwnd;
+            }
+            WatchGameProcess(exe, _currentGamePid);
 
-            // Pick the profile's monitor first so gamma, black flash (GSI ApplyContrast) and vibrance all land on it
-            string? target = DisplayTopology.ResolveProfileDisplay(prof);
+            // Pick the target first (the game's monitor or every monitor) so gamma, black flash (GSI ApplyContrast)
+            // and vibrance all land on it
+            string? target = EffectTarget(GameWindow());
             _gammaEngine.SetTargetDisplay(target);
             _vibrance.Apply(prof.VibranceEnabled ? prof.Vibrance : _config.Desktop.Vibrance, target);
 
@@ -1023,11 +1014,156 @@ namespace GUI.Forms
             // Always start watchdog timer while game profile is active to enforce process liveness & gamma
             _gammaEnforceTimer?.Start();
 
+            // Sound Lock Engine (Anti-Deaf / Footsteps booster)
+            if (prof.SoundLockEnabled)
+            {
+                if (string.Equals(prof.SoundLockMode, "dsp_lookahead", StringComparison.OrdinalIgnoreCase))
+                {
+                    _soundLockEngine.Stop();
+                    var (cableRenderId, cableCaptureId) = GUI.Engine.Audio.AudioEndpointHelper.GetVirtualCableEndpoints();
+                    if (!string.IsNullOrEmpty(cableRenderId) && !string.IsNullOrEmpty(cableCaptureId))
+                    {
+                        if (_currentGamePid > 0)
+                        {
+                            GUI.Engine.Audio.AudioPolicyConfig.SetAppOutputEndpoint((uint)_currentGamePid, cableRenderId);
+                            Program.Log($"[AudioRouting] Routed PID {_currentGamePid} ({exe}) to Virtual Cable: {cableRenderId}");
+                        }
+
+                        _lookaheadDspEngine.Start(
+                            cableCaptureId,
+                            prof.SoundLockOutputDeviceId,
+                            (prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40) / 100.0f,
+                            prof.SoundLockBoostDb,
+                            prof.SoundLockLookaheadMs,
+                            prof.SoundLockFastRecovery ? 45.0f : 120.0f
+                        );
+                    }
+                    else
+                    {
+                        Program.Log("[AudioRouting] Virtual Cable not installed. Falling back to SessionSoundLockEngine.");
+                        if (_currentGamePid > 0)
+                        {
+                            _soundLockEngine.Start(
+                                _currentGamePid,
+                                (prof.SoundLockGameVolume > 0 ? prof.SoundLockGameVolume : 60) / 100.0f,
+                                (prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40) / 100.0f,
+                                prof.SoundLockBalanceExternalApps,
+                                prof.SoundLockFastRecovery
+                            );
+                        }
+                    }
+                }
+                else if (_currentGamePid > 0)
+                {
+                    _lookaheadDspEngine.Stop();
+                    _soundLockEngine.Start(
+                        _currentGamePid,
+                        (prof.SoundLockGameVolume > 0 ? prof.SoundLockGameVolume : 60) / 100.0f,
+                        (prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40) / 100.0f,
+                        prof.SoundLockBalanceExternalApps,
+                        prof.SoundLockFastRecovery
+                    );
+                }
+            }
+            else
+            {
+                if (_currentGamePid > 0)
+                {
+                    GUI.Engine.Audio.AudioPolicyConfig.ResetAppOutputEndpoint((uint)_currentGamePid);
+                }
+                _soundLockEngine.Stop();
+                _lookaheadDspEngine.Stop();
+            }
+
             // Counteract DirectX / GPU driver swapchain reset when Alt-Tabbing back into exclusive fullscreen
             ScheduleReapply(exe, prof, 150);
             ScheduleReapply(exe, prof, 350);
 
             UpdateObserverStatus();
+        }
+
+        private bool IsCurrentGameRunning()
+        {
+            string? exe = _currentGameExe;
+            if (exe == null) return false;
+
+            if (_currentGamePid > 0)
+            {
+                try
+                {
+                    using var proc = Process.GetProcessById(_currentGamePid);
+                    string expectedName = Path.GetFileNameWithoutExtension(exe);
+                    return !proc.HasExited && string.Equals(proc.ProcessName, expectedName, StringComparison.OrdinalIgnoreCase);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            var procs = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exe));
+            bool running = procs.Length > 0;
+            foreach (var p in procs) { try { p.Dispose(); } catch { } }
+            return running;
+        }
+
+        // One watcher per game process: re-applying the same profile (focus / display change) keeps it
+        private void WatchGameProcess(string exe, int pid)
+        {
+            if (_gameExitWatcher != null && _gameExitWatcher.Pid == pid) return;
+            StopWatchingGameProcess();
+            if (pid <= 0) return;
+
+            _gameExitWatcher = ProcessExitWatcher.TryStart(pid, exe, () => OnGameProcessExited(pid));
+            if (_gameExitWatcher == null)
+            {
+                Program.Log($"Game exit watcher unavailable for {exe} (PID {pid}) -> polling every second.");
+            }
+        }
+
+        private void StopWatchingGameProcess()
+        {
+            _gameExitWatcher?.Dispose();
+            _gameExitWatcher = null;
+        }
+
+        // Thread pool callback of the exit watcher
+        private void OnGameProcessExited(int pid)
+        {
+            if (this.IsDisposed || _isCleanedUp || !this.IsHandleCreated) return;
+            try
+            {
+                this.BeginInvoke((MethodInvoker)delegate
+                {
+                    if (this.IsDisposed || _isCleanedUp) return;
+                    // Another game (or the desktop) may have taken over meanwhile
+                    if (_currentGameExe == null || _currentGamePid != pid) return;
+                    Program.Log($"{_currentGameExe} (PID {pid}) exited -> desktop settings.");
+                    ResetToDesktop();
+                });
+            }
+            catch { }
+        }
+
+        // Monitor the game effects go to: the one `gameWindow` is on with "Affect game monitor only" (primary when the
+        // window is unknown), else every monitor (null)
+        private string? EffectTarget(IntPtr gameWindow)
+        {
+            if (!_config.AffectGameMonitorOnly) return null;
+            return DisplayTopology.GetMonitorOfWindow(gameWindow) ?? DisplayTopology.GetPrimaryName();
+        }
+
+        // Window of the running game: the foreground window when it belongs to the game (it follows a window the game
+        // recreated, e.g. after a mode change), else the one the observer last reported
+        private IntPtr GameWindow()
+        {
+            IntPtr fg = GetForegroundWindow();
+            if (fg != IntPtr.Zero && _currentGamePid > 0)
+            {
+                GetWindowThreadProcessId(fg, out uint pid);
+                if (pid == (uint)_currentGamePid) _currentGameHwnd = fg;
+            }
+            return _currentGameHwnd;
         }
 
         // "CS2 GSI Active" follows the live connection. It used to be set only when a profile was applied, which is
@@ -1056,6 +1192,7 @@ namespace GUI.Forms
             // Only apply anti-flash if CS2 is focused
             if (!isCs2Active)
             {
+                LogGsiGate($"skipped: CS2 not active (current game '{_currentGameExe ?? "none"}', foreground is not cs2.exe)");
                 // CRITICAL FAILSAFE: If screen was dimmed while in CS2, but user Alt-Tabbed out or CS2 closed/crashed,
                 // restore contrast immediately so desktop / other apps are never stuck dimmed!
                 if (_gammaEngine.CurrentContrast < 0.999)
@@ -1076,6 +1213,7 @@ namespace GUI.Forms
 
             if (!cs2Prof.Cs2AntiFlashEnabled)
             {
+                LogGsiGate("skipped: anti-flash disabled in the cs2.exe profile");
                 if (_gammaEngine.CurrentContrast < 0.999)
                 {
                     _gammaEngine.ApplyContrast(1.0);
@@ -1083,11 +1221,11 @@ namespace GUI.Forms
                 return;
             }
 
-            // CS2 detected without its profile being applied (no saved profile): only dim the game monitor
-            // (primary unless the profile says otherwise), never the stream / second screen.
-            if (_gammaEngine.TargetDisplay == null)
+            // CS2 detected without its profile applied (no saved profile, or GSI ahead of the focus event): with
+            // "Affect game monitor only", dim the monitor of the focused CS2 window. An applied profile has set the target.
+            if (_config.AffectGameMonitorOnly && _gammaEngine.TargetDisplay == null)
             {
-                _gammaEngine.SetTargetDisplay(DisplayTopology.ResolveProfileDisplay(cs2Prof));
+                _gammaEngine.SetTargetDisplay(EffectTarget(GetForegroundWindow()));
             }
 
             double f = flashed;
@@ -1098,25 +1236,37 @@ namespace GUI.Forms
             double effectiveContrast = 1.0 - (1.0 - contrast) * maxDim;
 
             // 1. CRITICAL PATH: Apply contrast immediately to GPU hardware (0.00ms delay!)
-            _gammaEngine.ApplyContrast(effectiveContrast);
+            bool applied = _gammaEngine.ApplyContrast(effectiveContrast);
+            LogGsiGate("applying");
 
             // 2. NON-CRITICAL PATH: Log state changes asynchronously (only if debug logging is explicitly enabled)
             bool shouldLog = (f <= 0.01 && _lastLoggedFlashedFraction > 0.01) || Math.Abs(f - _lastLoggedFlashedFraction) > 0.05;
             if (Program.EnableLogging && shouldLog)
             {
                 _lastLoggedFlashedFraction = f;
+                string path = $"ok={applied}, mode={_gammaEngine.ActiveMode}, target={_gammaEngine.TargetDisplay ?? "all"}";
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
                     if (f > 0.02)
                     {
-                        Program.Log($"[CS2 Flash] Flashed={f * 100:0.0}% (raw='{rawFlashed}') -> Dimming screen (contrast={effectiveContrast:0.00})");
+                        Program.Log($"[CS2 Flash] Flashed={f * 100:0.0}% (raw='{rawFlashed}') -> Dimming screen (contrast={effectiveContrast:0.00}, {path})");
                     }
                     else
                     {
-                        Program.Log($"[CS2 Flash] Flash ended (raw='{rawFlashed}') -> Screen restored.");
+                        Program.Log($"[CS2 Flash] Flash ended (raw='{rawFlashed}') -> Screen restored ({path}).");
                     }
                 });
             }
+        }
+
+        // Why GSI packets are (not) acted on, logged when it changes: a skipped packet otherwise leaves no trace
+        private string? _lastGsiGate;
+
+        private void LogGsiGate(string gate)
+        {
+            if (!Program.EnableLogging || gate == _lastGsiGate) return;
+            _lastGsiGate = gate;
+            Program.Log($"[CS2 GSI] {gate}");
         }
 
         // Last foreground window checked by IsForegroundCs2, so packets while the same window stays focused skip the
@@ -1176,9 +1326,17 @@ namespace GUI.Forms
         private void ResetToDesktop()
         {
             if (_isCleanedUp) return;
+            if (_currentGamePid > 0)
+            {
+                GUI.Engine.Audio.AudioPolicyConfig.ResetAppOutputEndpoint((uint)_currentGamePid);
+            }
             _currentGameExe = null;
             _currentGamePid = 0;
+            _currentGameHwnd = IntPtr.Zero;
             _currentGameProfile = null;
+            StopWatchingGameProcess();
+            _soundLockEngine.Stop();
+            _lookaheadDspEngine.Stop();
             _gammaEnforceTimer?.Stop();
             _vibrance.Restore();
             // Reset every LUT first, then drop the target, so the game curve never spreads to all monitors
@@ -1194,7 +1352,7 @@ namespace GUI.Forms
             if (this.IsDisposed || _isCleanedUp) return;
             try
             {
-                MonitorEngine.InvalidateMonitorCache();
+                DisplayTopology.Invalidate();
                 _vibrance.RefreshDisplays();
 
                 var prof = _currentGameProfile;
@@ -1258,6 +1416,9 @@ namespace GUI.Forms
             {
                 try { _gammaEnforceTimer?.Stop(); } catch { }
                 try { _gammaEnforceTimer?.Dispose(); } catch { }
+                try { StopWatchingGameProcess(); } catch { }
+                try { _soundLockEngine.Dispose(); } catch { }
+                try { _lookaheadDspEngine.Dispose(); } catch { }
                 try { _observer.Stop(); } catch { }
 
                 try
@@ -1348,13 +1509,10 @@ namespace GUI.Forms
             // 3. Restore default screen resolution if changed during this session
             try { DisplayEngine.RestoreDefaultResolution(); } catch { }
 
-            // 4. Re-enable any secondary monitors disabled during this session
-            try { MonitorEngine.RestoreOnExit(); } catch { }
-
-            // 5. Stop GoodbyeDPI if running
+            // 4. Stop GoodbyeDPI if running
             try { GoodbyeDpiEngine.StopOnExit(); } catch { }
 
-            // 6. Stop CS2 GSI Listener
+            // 5. Stop CS2 GSI Listener
             try { _gsiListener.Dispose(); } catch { }
         }
 

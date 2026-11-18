@@ -32,8 +32,28 @@ namespace GUI.Forms
         private TrackBar _tbBoost;
         private Label _lblBoostVal;
 
-        private ComboBox _cmbDisplayTarget;
-        private Font? _monitorDetailFont;
+        // Sound Lock & Lookahead DSP Controls
+        private CheckBox _chkSoundLock;
+        private CheckBox _chkEnableDsp;
+        private Label _lblBoostPrompt;
+        private TrackBar _tbBoostDb;
+        private Label _lblBoostDbVal;
+        private Label _lblLimitPrompt;
+        private TrackBar _tbLimit;
+        private Label _lblLimitVal;
+        private CheckBox _chkFastRecovery;
+        private CheckBox _chkBalanceApps;
+
+        // Output Device & Virtual Audio Cable routing controls
+        private Label _lblOutputDevicePrompt;
+        private ComboBox _cmbOutputDevice;
+        private Label _lblCableStatus;
+        private Button _btnSetupCable;
+        private Button _btnSoundCpl;
+        private System.Collections.Generic.List<GUI.Engine.Audio.AudioEndpointInfo> _audioEndpoints = new();
+
+        // Global "Affect game monitor only" setting; the Test preview then uses the monitor this dialog is on
+        private readonly bool _gameMonitorOnly;
         private string? _prevTargetDisplay;
 
         private GroupBox? _gbAntiFlash;
@@ -52,9 +72,10 @@ namespace GUI.Forms
 
         public GameProfile ResultProfile { get; private set; }
 
-        public GameConfigForm(string exeName, GameProfile? initialProfile = null, IVibranceEngine? vibrance = null, GammaEngine? gamma = null, Cs2GsiListener? gsi = null)
+        public GameConfigForm(string exeName, GameProfile? initialProfile = null, IVibranceEngine? vibrance = null, GammaEngine? gamma = null, Cs2GsiListener? gsi = null, bool gameMonitorOnly = false)
         {
             _exeName = exeName;
+            _gameMonitorOnly = gameMonitorOnly;
             _vibrance = vibrance;
             _gammaEngine = gamma;
             _gsiListener = gsi;
@@ -78,8 +99,6 @@ namespace GUI.Forms
             {
                 _statusTimer?.Stop();
                 _statusTimer?.Dispose();
-                _monitorDetailFont?.Dispose();
-                _monitorDetailFont = null;
                 if (_isTesting)
                 {
                     RevertPreview();
@@ -90,31 +109,46 @@ namespace GUI.Forms
 
         private void InitializeComponent()
         {
-            this.Text = _exeName;
+            this.Text = $"{_exeName} - Game Profile Configuration";
             bool isCs2 = string.Equals(_exeName, "cs2.exe", StringComparison.OrdinalIgnoreCase);
-            this.Size = isCs2 ? new Size(360, 576) : new Size(360, 440);
+
+            // Symmetrical geometry: 14px outer margins, 328px columns, 16px center gap (Total width = 700)
+            const int colWidth = 328;
+            const int leftColX = 14;
+            const int rightColX = 358;
+
+            int separatorY = isCs2 ? 434 : 344;
+            int btnY = isCs2 ? 444 : 354;
+            int clientH = isCs2 ? 486 : 396;
+
+            this.ClientSize = new Size(700, clientH);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.StartPosition = FormStartPosition.CenterParent;
-            this.BackColor = Color.FromArgb(240, 240, 240);
+            this.BackColor = Color.FromArgb(243, 244, 246);
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.Icon = Utils.IconHelper.GetAppIcon();
 
+            // ==========================================
+            // LEFT COLUMN: Video & Visuals
+            // ==========================================
+
             // Group 1: In-game Vibrance Level
+            int vibH = isCs2 ? 74 : 78;
             var gbVib = new GroupBox
             {
                 Text = "In-game Vibrance Level",
-                Location = new Point(14, 10),
-                Size = new Size(316, 76),
+                Location = new Point(leftColX, 12),
+                Size = new Size(colWidth, vibH),
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
             };
 
             _lblVibranceVal = new Label
             {
                 Text = "50%",
-                Location = new Point(255, 14),
-                Size = new Size(50, 20),
+                Location = new Point(246, 14),
+                Size = new Size(70, 20),
                 TextAlign = ContentAlignment.MiddleRight,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
             };
@@ -125,8 +159,8 @@ namespace GUI.Forms
                 Maximum = 100,
                 Value = 50,
                 TickFrequency = 10,
-                Location = new Point(10, 32),
-                Size = new Size(296, 35)
+                Location = new Point(10, isCs2 ? 34 : 36),
+                Size = new Size(308, 34)
             };
             _tbVibrance.ValueChanged += (s, e) =>
             {
@@ -138,31 +172,35 @@ namespace GUI.Forms
             gbVib.Controls.Add(_tbVibrance);
 
             // Group 2: Gamma Setting
+            int gammaY = isCs2 ? 92 : 98;
+            int gammaH = isCs2 ? 86 : 114;
             var gbGamma = new GroupBox
             {
                 Text = "Gamma Setting",
-                Location = new Point(14, 94),
-                Size = new Size(316, 92),
+                Location = new Point(leftColX, gammaY),
+                Size = new Size(colWidth, gammaH),
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
             };
 
             _chkGamma = new CheckBox
             {
                 Text = "Enable Gamma",
-                Location = new Point(12, 22),
+                Location = new Point(12, 20),
                 AutoSize = true
             };
             _chkGamma.CheckedChanged += (s, e) =>
             {
+                UpdateGammaControlsEnabled();
                 if (_isTesting) ApplyPreview();
             };
 
             _lblGammaVal = new Label
             {
                 Text = "1.80",
-                Location = new Point(255, 22),
-                Size = new Size(50, 20),
-                TextAlign = ContentAlignment.MiddleRight
+                Location = new Point(246, 20),
+                Size = new Size(70, 20),
+                TextAlign = ContentAlignment.MiddleRight,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
             };
 
             _tbGamma = new TrackBar
@@ -171,8 +209,8 @@ namespace GUI.Forms
                 Maximum = 240,
                 Value = 180,
                 TickFrequency = 10,
-                Location = new Point(10, 48),
-                Size = new Size(296, 35)
+                Location = new Point(10, 44),
+                Size = new Size(308, 34)
             };
             _tbGamma.ValueChanged += (s, e) =>
             {
@@ -184,32 +222,49 @@ namespace GUI.Forms
             gbGamma.Controls.Add(_lblGammaVal);
             gbGamma.Controls.Add(_tbGamma);
 
+            if (!isCs2)
+            {
+                var lblGammaTip = new Label
+                {
+                    Text = "Default is 2.20. Lower values brighten dark areas.",
+                    Location = new Point(12, 84),
+                    Size = new Size(304, 20),
+                    ForeColor = Color.FromArgb(100, 100, 100),
+                    Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point)
+                };
+                gbGamma.Controls.Add(lblGammaTip);
+            }
+
             // Group 3: Black Boost
+            int boostY = isCs2 ? 184 : 220;
+            int boostH = isCs2 ? 86 : 114;
             var gbBoost = new GroupBox
             {
                 Text = "Black Boost",
-                Location = new Point(14, 194),
-                Size = new Size(316, 92),
+                Location = new Point(leftColX, boostY),
+                Size = new Size(colWidth, boostH),
                 Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
             };
 
             _chkBoost = new CheckBox
             {
                 Text = "Enable Black Boost",
-                Location = new Point(12, 22),
+                Location = new Point(12, 20),
                 AutoSize = true
             };
             _chkBoost.CheckedChanged += (s, e) =>
             {
+                UpdateBoostControlsEnabled();
                 if (_isTesting) ApplyPreview();
             };
 
             _lblBoostVal = new Label
             {
                 Text = "0%",
-                Location = new Point(255, 22),
-                Size = new Size(50, 20),
-                TextAlign = ContentAlignment.MiddleRight
+                Location = new Point(246, 20),
+                Size = new Size(70, 20),
+                TextAlign = ContentAlignment.MiddleRight,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
             };
 
             _tbBoost = new TrackBar
@@ -218,8 +273,8 @@ namespace GUI.Forms
                 Maximum = 100,
                 Value = 0,
                 TickFrequency = 10,
-                Location = new Point(10, 48),
-                Size = new Size(296, 35)
+                Location = new Point(10, 44),
+                Size = new Size(308, 34)
             };
             _tbBoost.ValueChanged += (s, e) =>
             {
@@ -231,62 +286,50 @@ namespace GUI.Forms
             gbBoost.Controls.Add(_lblBoostVal);
             gbBoost.Controls.Add(_tbBoost);
 
-            // Monitor the game is played on: colors / black flash apply only there (the other screen is for stream / info)
-            var lblDisplayTarget = new Label
+            if (!isCs2)
             {
-                Text = "Apply to:",
-                Location = new Point(16, 306),
-                Size = new Size(70, 20)
-            };
+                var lblBoostTip = new Label
+                {
+                    Text = "Lifts dark shadows without washing out highlights.",
+                    Location = new Point(12, 84),
+                    Size = new Size(304, 20),
+                    ForeColor = Color.FromArgb(100, 100, 100),
+                    Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point)
+                };
+                gbBoost.Controls.Add(lblBoostTip);
+            }
 
-            _cmbDisplayTarget = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                DrawMode = DrawMode.OwnerDrawFixed,
-                ItemHeight = 30,
-                Location = new Point(90, 297),
-                Width = 220,
-                DropDownWidth = 240
-            };
-            _cmbDisplayTarget.DrawItem += DrawMonitorItem;
-            _cmbDisplayTarget.SelectedIndexChanged += (s, e) =>
-            {
-                if (_isTesting) ApplyPreview();
-            };
-
-            this.Controls.Add(lblDisplayTarget);
-            this.Controls.Add(_cmbDisplayTarget);
-
+            // Group 4: CS2 Anti-Flashbang (Only for CS2)
             if (isCs2)
             {
                 _gbAntiFlash = new GroupBox
                 {
                     Text = "CS2 Anti-Flashbang",
-                    Location = new Point(14, 344),
-                    Size = new Size(316, 142),
+                    Location = new Point(leftColX, 276),
+                    Size = new Size(colWidth, 146),
                     Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
                 };
 
                 _chkAntiFlash = new CheckBox
                 {
                     Text = "Enable Black Flash",
-                    Location = new Point(12, 22),
-                    Size = new Size(280, 20),
+                    Location = new Point(12, 20),
                     AutoSize = true
                 };
+                _chkAntiFlash.CheckedChanged += (s, e) => UpdateAntiFlashControlsEnabled();
 
                 var lblDimPrompt = new Label
                 {
                     Text = "Dim:",
-                    Location = new Point(10, 50),
-                    Size = new Size(32, 20),
+                    Location = new Point(12, 48),
+                    Size = new Size(34, 20),
                     Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
                 };
 
                 _lblMaxDimVal = new Label
                 {
                     Text = "100%",
-                    Location = new Point(42, 50),
+                    Location = new Point(46, 48),
                     Size = new Size(42, 20),
                     Font = new Font("Segoe UI", 8.5F, FontStyle.Bold, GraphicsUnit.Point)
                 };
@@ -298,8 +341,8 @@ namespace GUI.Forms
                     Value = 100,
                     TickFrequency = 10,
                     AutoSize = false,
-                    Location = new Point(84, 44),
-                    Size = new Size(136, 32)
+                    Location = new Point(88, 42),
+                    Size = new Size(142, 32)
                 };
                 _tbMaxDim.ValueChanged += (s, e) =>
                 {
@@ -309,7 +352,7 @@ namespace GUI.Forms
                 _btnSetup = new Button
                 {
                     Text = "Setup",
-                    Location = new Point(226, 46),
+                    Location = new Point(236, 42),
                     Size = new Size(80, 28),
                     BackColor = Color.White,
                     FlatStyle = FlatStyle.System,
@@ -319,15 +362,15 @@ namespace GUI.Forms
 
                 _lblSetupStatus = new Label
                 {
-                    Location = new Point(12, 88),
-                    Size = new Size(294, 20),
+                    Location = new Point(12, 80),
+                    Size = new Size(304, 20),
                     Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
                 };
 
                 _lblGsiConnection = new Label
                 {
-                    Location = new Point(12, 112),
-                    Size = new Size(294, 20),
+                    Location = new Point(12, 104),
+                    Size = new Size(304, 20),
                     Font = new Font("Segoe UI", 8.5F, FontStyle.Bold, GraphicsUnit.Point)
                 };
 
@@ -347,47 +390,513 @@ namespace GUI.Forms
                 _statusTimer.Start();
             }
 
-            // Bottom Buttons: Save (left), Test (center), Cancel (right)
-            int btnY = isCs2 ? 494 : 355;
+            // ==========================================
+            // RIGHT COLUMN: Sound Lock & Lookahead DSP
+            // ==========================================
+            int soundLockH = isCs2 ? 410 : 322;
+            var gbSoundLock = new GroupBox
+            {
+                Text = "Sound Lock && Lookahead DSP (Anti-Pop Limiter)",
+                Location = new Point(rightColX, 12),
+                Size = new Size(colWidth, soundLockH),
+                Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
+            };
+
+            _chkSoundLock = new CheckBox
+            {
+                Text = "Enable Sound Limiter (Anti-Deaf)",
+                Location = new Point(12, 18),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
+            };
+            _chkSoundLock.CheckedChanged += (s, e) => UpdateSoundLockControlsEnabled();
+
+            _chkEnableDsp = new CheckBox
+            {
+                Text = "True DSP Lookahead (Zero Attack-Pop)",
+                Location = new Point(12, 38),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Bold, GraphicsUnit.Point),
+                Checked = true
+            };
+            _chkEnableDsp.CheckedChanged += (s, e) =>
+            {
+                bool dspOn = _chkEnableDsp.Checked && _chkSoundLock.Checked;
+                _lblBoostPrompt.Enabled = dspOn;
+                _lblBoostDbVal.Enabled = dspOn;
+                _tbBoostDb.Enabled = dspOn;
+            };
+
+            _lblBoostPrompt = new Label
+            {
+                Text = "Footstep Boost (Loudness EQ):",
+                Location = new Point(12, 58),
+                AutoSize = true
+            };
+
+            _lblBoostDbVal = new Label
+            {
+                Text = "+4 dB",
+                Location = new Point(246, 58),
+                Size = new Size(70, 16),
+                TextAlign = ContentAlignment.MiddleRight,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
+            };
+
+            _tbBoostDb = new TrackBar
+            {
+                Minimum = 0,
+                Maximum = 12,
+                Value = 4,
+                TickFrequency = 2,
+                Location = new Point(10, 74),
+                Size = new Size(308, 28)
+            };
+            _tbBoostDb.ValueChanged += (s, e) =>
+            {
+                _lblBoostDbVal.Text = $"+{_tbBoostDb.Value} dB";
+            };
+
+            _lblLimitPrompt = new Label
+            {
+                Text = "Sound Ceiling Limit (Max Volume):",
+                Location = new Point(12, 102),
+                AutoSize = true
+            };
+
+            _lblLimitVal = new Label
+            {
+                Text = "40%",
+                Location = new Point(246, 102),
+                Size = new Size(70, 16),
+                TextAlign = ContentAlignment.MiddleRight,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
+            };
+
+            _tbLimit = new TrackBar
+            {
+                Minimum = 5,
+                Maximum = 100,
+                Value = 40,
+                TickFrequency = 10,
+                Location = new Point(10, 118),
+                Size = new Size(308, 28)
+            };
+            _tbLimit.ValueChanged += (s, e) =>
+            {
+                _lblLimitVal.Text = $"{_tbLimit.Value}%";
+            };
+
+            _chkFastRecovery = new CheckBox
+            {
+                Text = "Fast footstep recovery (~40ms after gunfire)",
+                Location = new Point(12, 146),
+                Size = new Size(304, 18),
+                Checked = true
+            };
+
+            _chkBalanceApps = new CheckBox
+            {
+                Text = "Keep background apps (Discord) untouched",
+                Location = new Point(12, 166),
+                Size = new Size(304, 18),
+                Checked = true
+            };
+
+            // Audio Routing Separator
+            var pnlAudioSep = new Panel
+            {
+                Location = new Point(10, 188),
+                Size = new Size(308, 1),
+                BackColor = Color.FromArgb(226, 232, 240)
+            };
+
+            _lblOutputDevicePrompt = new Label
+            {
+                Text = "Output Device (DAC / Headset):",
+                Location = new Point(12, 194),
+                Size = new Size(304, 16),
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Bold, GraphicsUnit.Point),
+                ForeColor = Color.FromArgb(30, 58, 138)
+            };
+
+            _cmbOutputDevice = new ComboBox
+            {
+                Location = new Point(10, 212),
+                Size = new Size(308, 24),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
+            };
+
+            _lblCableStatus = new Label
+            {
+                Text = "Checking Virtual Cable...",
+                Location = new Point(12, 242),
+                Size = new Size(202, 24),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
+            };
+
+            _btnSetupCable = new Button
+            {
+                Text = "Setup Cable",
+                Location = new Point(216, 241),
+                Size = new Size(102, 26),
+                BackColor = Color.White,
+                FlatStyle = FlatStyle.System,
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Bold, GraphicsUnit.Point)
+            };
+            _btnSetupCable.Click += (s, e) => OnSetupCableClick();
+
+            _btnSoundCpl = new Button
+            {
+                Text = "Sound CPL",
+                Size = new Size(76, 22),
+                BackColor = Color.White,
+                FlatStyle = FlatStyle.System,
+                Font = new Font("Segoe UI", 7.5F, FontStyle.Regular, GraphicsUnit.Point)
+            };
+            _btnSoundCpl.Click += (s, e) => GUI.Engine.Audio.VirtualAudioInstaller.OpenSoundControlPanel();
+
+            gbSoundLock.Controls.Add(_chkSoundLock);
+            gbSoundLock.Controls.Add(_chkEnableDsp);
+            gbSoundLock.Controls.Add(_lblBoostPrompt);
+            gbSoundLock.Controls.Add(_lblBoostDbVal);
+            gbSoundLock.Controls.Add(_tbBoostDb);
+            gbSoundLock.Controls.Add(_lblLimitPrompt);
+            gbSoundLock.Controls.Add(_lblLimitVal);
+            gbSoundLock.Controls.Add(_tbLimit);
+            gbSoundLock.Controls.Add(_chkFastRecovery);
+            gbSoundLock.Controls.Add(_chkBalanceApps);
+            gbSoundLock.Controls.Add(pnlAudioSep);
+            gbSoundLock.Controls.Add(_lblOutputDevicePrompt);
+            gbSoundLock.Controls.Add(_cmbOutputDevice);
+            gbSoundLock.Controls.Add(_lblCableStatus);
+            gbSoundLock.Controls.Add(_btnSetupCable);
+
+            if (isCs2)
+            {
+                // CS2 Extra Height: Professional Hardware Protection & Status Panel
+                var pnlDacInfo = new Panel
+                {
+                    Location = new Point(10, 273),
+                    Size = new Size(308, 127),
+                    BackColor = Color.FromArgb(238, 242, 248),
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+
+                var lblDacTitle = new Label
+                {
+                    Text = "✓ USB DAC Protected • DSP",
+                    Location = new Point(8, 6),
+                    Size = new Size(204, 18),
+                    Font = new Font("Segoe UI", 8.5F, FontStyle.Bold, GraphicsUnit.Point),
+                    ForeColor = Color.FromArgb(30, 58, 138)
+                };
+
+                _btnSoundCpl.Location = new Point(222, 4);
+
+                var lblDac1 = new Label
+                {
+                    Text = "• Creative Sound BlasterX G6 Protected",
+                    Location = new Point(8, 26),
+                    Size = new Size(290, 16),
+                    Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point),
+                    ForeColor = Color.FromArgb(51, 65, 85)
+                };
+
+                var lblDac2 = new Label
+                {
+                    Text = "• 0 USB hardware commands (zero EP0 packet spam)",
+                    Location = new Point(8, 44),
+                    Size = new Size(290, 16),
+                    Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point),
+                    ForeColor = Color.FromArgb(51, 65, 85)
+                };
+
+                var lblDac3 = new Label
+                {
+                    Text = "• 48kHz 32-bit Float sample-accurate ring buffer",
+                    Location = new Point(8, 62),
+                    Size = new Size(290, 16),
+                    Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point),
+                    ForeColor = Color.FromArgb(51, 65, 85)
+                };
+
+                var lblDac4 = new Label
+                {
+                    Text = "• 4.0ms Lookahead latency with zero gunshot pop",
+                    Location = new Point(8, 80),
+                    Size = new Size(290, 16),
+                    Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point),
+                    ForeColor = Color.FromArgb(51, 65, 85)
+                };
+
+                var lblDac5 = new Label
+                {
+                    Text = "• Auto-routes game stream to Virtual Cable",
+                    Location = new Point(8, 98),
+                    Size = new Size(295, 16),
+                    Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point),
+                    ForeColor = Color.FromArgb(51, 65, 85)
+                };
+
+                pnlDacInfo.Controls.Add(lblDacTitle);
+                pnlDacInfo.Controls.Add(_btnSoundCpl);
+                pnlDacInfo.Controls.Add(lblDac1);
+                pnlDacInfo.Controls.Add(lblDac2);
+                pnlDacInfo.Controls.Add(lblDac3);
+                pnlDacInfo.Controls.Add(lblDac4);
+                pnlDacInfo.Controls.Add(lblDac5);
+                gbSoundLock.Controls.Add(pnlDacInfo);
+            }
+            else
+            {
+                var pnlDacInfo = new Panel
+                {
+                    Location = new Point(10, 273),
+                    Size = new Size(308, 41),
+                    BackColor = Color.FromArgb(238, 242, 248),
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+
+                var lblDacTitle = new Label
+                {
+                    Text = "✓ USB DAC Protected",
+                    Location = new Point(8, 4),
+                    Size = new Size(204, 16),
+                    Font = new Font("Segoe UI", 8F, FontStyle.Bold, GraphicsUnit.Point),
+                    ForeColor = Color.FromArgb(30, 58, 138)
+                };
+
+                _btnSoundCpl.Location = new Point(222, 3);
+                _btnSoundCpl.Size = new Size(76, 20);
+
+                var lblDacDesc = new Label
+                {
+                    Text = "Creative G6 safe (0 EP0 spam) • Auto-routes game audio",
+                    Location = new Point(8, 21),
+                    Size = new Size(292, 16),
+                    Font = new Font("Segoe UI", 7.5F, FontStyle.Regular, GraphicsUnit.Point),
+                    ForeColor = Color.FromArgb(51, 65, 85)
+                };
+
+                pnlDacInfo.Controls.Add(lblDacTitle);
+                pnlDacInfo.Controls.Add(_btnSoundCpl);
+                pnlDacInfo.Controls.Add(lblDacDesc);
+                gbSoundLock.Controls.Add(pnlDacInfo);
+            }
+
+            // ==========================================
+            // BOTTOM BAR: Separator & Balanced Action Buttons
+            // ==========================================
+            var pnlSeparator = new Panel
+            {
+                Location = new Point(leftColX, separatorY),
+                Size = new Size(colWidth * 2 + 16, 1),
+                BackColor = Color.FromArgb(220, 224, 230)
+            };
+
+            // Left anchor: Test Preview button
+            _btnTest = new Button
+            {
+                Text = "Test Preview",
+                Location = new Point(leftColX, btnY),
+                Size = new Size(110, 30),
+                BackColor = Color.White,
+                FlatStyle = FlatStyle.System,
+                Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
+            };
+            _btnTest.Click += (s, e) => OnToggleTest();
+
+            // Right anchor: Save (Accept) and Cancel buttons
             _btnSave = new Button
             {
                 Text = "Save",
-                Location = new Point(14, btnY),
-                Size = new Size(95, 30),
+                Location = new Point(480, btnY),
+                Size = new Size(96, 30),
                 BackColor = Color.White,
-                FlatStyle = FlatStyle.System
+                FlatStyle = FlatStyle.System,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
             };
             _btnSave.Click += (s, e) => OnSave();
-
-            _btnTest = new Button
-            {
-                Text = "Test",
-                Location = new Point(125, btnY),
-                Size = new Size(95, 30),
-                BackColor = Color.White,
-                FlatStyle = FlatStyle.System
-            };
-            _btnTest.Click += (s, e) => OnToggleTest();
 
             _btnCancel = new Button
             {
                 Text = "Cancel",
-                Location = new Point(235, btnY),
-                Size = new Size(95, 30),
+                Location = new Point(590, btnY),
+                Size = new Size(96, 30),
                 BackColor = Color.White,
-                FlatStyle = FlatStyle.System
+                FlatStyle = FlatStyle.System,
+                Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point)
             };
             _btnCancel.Click += (s, e) => { this.DialogResult = DialogResult.Cancel; this.Close(); };
 
             this.Controls.Add(gbVib);
             this.Controls.Add(gbGamma);
             this.Controls.Add(gbBoost);
-            this.Controls.Add(_btnSave);
+            this.Controls.Add(gbSoundLock);
+            this.Controls.Add(pnlSeparator);
             this.Controls.Add(_btnTest);
+            this.Controls.Add(_btnSave);
             this.Controls.Add(_btnCancel);
 
             this.AcceptButton = _btnSave;
             this.CancelButton = _btnCancel;
+        }
+
+        private void UpdateGammaControlsEnabled()
+        {
+            bool enabled = _chkGamma.Checked;
+            _tbGamma.Enabled = enabled;
+            _lblGammaVal.ForeColor = enabled ? Color.Black : SystemColors.GrayText;
+        }
+
+        private void UpdateBoostControlsEnabled()
+        {
+            bool enabled = _chkBoost.Checked;
+            _tbBoost.Enabled = enabled;
+            _lblBoostVal.ForeColor = enabled ? Color.Black : SystemColors.GrayText;
+        }
+
+        private void UpdateAntiFlashControlsEnabled()
+        {
+            bool enabled = _chkAntiFlash?.Checked ?? false;
+            if (_tbMaxDim != null) _tbMaxDim.Enabled = enabled;
+            if (_lblMaxDimVal != null) _lblMaxDimVal.ForeColor = enabled ? Color.Black : SystemColors.GrayText;
+        }
+
+        private void UpdateSoundLockControlsEnabled()
+        {
+            bool masterOn = _chkSoundLock.Checked;
+            _chkEnableDsp.Enabled = masterOn;
+
+            bool dspActive = masterOn && _chkEnableDsp.Checked;
+            _lblBoostPrompt.Enabled = dspActive;
+            _lblBoostDbVal.Enabled = dspActive;
+            _tbBoostDb.Enabled = dspActive;
+
+            _lblLimitPrompt.Enabled = masterOn;
+            _lblLimitVal.Enabled = masterOn;
+            _tbLimit.Enabled = masterOn;
+
+            _chkFastRecovery.Enabled = masterOn;
+            _chkBalanceApps.Enabled = masterOn;
+
+            _lblOutputDevicePrompt.Enabled = masterOn;
+            _cmbOutputDevice.Enabled = masterOn;
+            _lblCableStatus.Enabled = masterOn;
+            _btnSetupCable.Enabled = masterOn;
+            _btnSoundCpl.Enabled = masterOn;
+        }
+
+        private void RefreshAudioEndpoints()
+        {
+            _cmbOutputDevice.Items.Clear();
+            _audioEndpoints = GUI.Engine.Audio.AudioEndpointHelper.GetRenderEndpoints();
+
+            int selectedIndex = -1;
+            int g6Index = -1;
+            int defaultIndex = -1;
+
+            for (int i = 0; i < _audioEndpoints.Count; i++)
+            {
+                var ep = _audioEndpoints[i];
+                string displayText = ep.Name;
+                if (ep.IsG6) displayText += " ★ [G6]";
+                else if (ep.IsDefault) displayText += " (Default)";
+
+                _cmbOutputDevice.Items.Add(displayText);
+
+                if (!string.IsNullOrEmpty(_profile.SoundLockOutputDeviceId) &&
+                    string.Equals(ep.Id, _profile.SoundLockOutputDeviceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    selectedIndex = i;
+                }
+                if (ep.IsG6 && g6Index == -1) g6Index = i;
+                if (ep.IsDefault && defaultIndex == -1) defaultIndex = i;
+            }
+
+            if (selectedIndex >= 0)
+                _cmbOutputDevice.SelectedIndex = selectedIndex;
+            else if (g6Index >= 0)
+                _cmbOutputDevice.SelectedIndex = g6Index;
+            else if (defaultIndex >= 0)
+                _cmbOutputDevice.SelectedIndex = defaultIndex;
+            else if (_cmbOutputDevice.Items.Count > 0)
+                _cmbOutputDevice.SelectedIndex = 0;
+
+            UpdateVirtualCableStatus();
+        }
+
+        private void UpdateVirtualCableStatus()
+        {
+            bool installed = GUI.Engine.Audio.VirtualAudioInstaller.IsInstalled(out _, out _);
+            if (installed)
+            {
+                _lblCableStatus.Text = "✓ Virtual Cable: Ready";
+                _lblCableStatus.ForeColor = Color.FromArgb(22, 163, 74);
+                _btnSetupCable.Text = "Sync Format";
+            }
+            else
+            {
+                _lblCableStatus.Text = "⚠ Virtual Cable: Not detected";
+                _lblCableStatus.ForeColor = Color.FromArgb(220, 38, 38);
+                _btnSetupCable.Text = "Setup Cable";
+            }
+        }
+
+        private async void OnSetupCableClick()
+        {
+            _btnSetupCable.Enabled = false;
+            _btnSetupCable.Text = "Working...";
+
+            string? selectedDevId = null;
+            if (_cmbOutputDevice.SelectedIndex >= 0 && _cmbOutputDevice.SelectedIndex < _audioEndpoints.Count)
+            {
+                selectedDevId = _audioEndpoints[_cmbOutputDevice.SelectedIndex].Id;
+            }
+
+            var (success, msg) = await GUI.Engine.Audio.VirtualAudioInstaller.InstallAndConfigureAsync(
+                status =>
+                {
+                    if (!this.IsDisposed && this.IsHandleCreated)
+                    {
+                        this.BeginInvoke(() =>
+                        {
+                            _lblCableStatus.Text = status;
+                            _lblCableStatus.ForeColor = Color.FromArgb(30, 58, 138);
+                        });
+                    }
+                },
+                selectedDevId
+            );
+
+            if (!this.IsDisposed)
+            {
+                RefreshAudioEndpoints();
+                _btnSetupCable.Enabled = true;
+
+                if (success)
+                {
+                    MessageBox.Show(this,
+                        "Virtual Audio Cable is ready!\n\n" +
+                        "• Per-App routing will automatically direct game audio to Virtual Cable.\n" +
+                        "• True DSP Lookahead will process and stream clean audio to your output DAC.\n" +
+                        "• Discord and other applications will remain untouched on your primary output.",
+                        "Virtual Audio Cable",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show(this,
+                        msg,
+                        "Virtual Audio Cable Setup",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
         }
 
         private void LoadProfileData()
@@ -399,12 +908,12 @@ namespace GUI.Forms
             int gVal = (int)Math.Round(_profile.Gamma * 100.0);
             _tbGamma.Value = Math.Clamp(gVal, 140, 240);
             _lblGammaVal.Text = $"{(_tbGamma.Value / 100.0):0.00}";
+            UpdateGammaControlsEnabled();
 
             _chkBoost.Checked = _profile.BoostEnabled;
             _tbBoost.Value = Math.Clamp(_profile.Boost, 0, 100);
             _lblBoostVal.Text = $"{_tbBoost.Value}%";
-
-            PopulateMonitorList();
+            UpdateBoostControlsEnabled();
 
             if (_chkAntiFlash != null) _chkAntiFlash.Checked = _profile.Cs2AntiFlashEnabled;
             if (_tbMaxDim != null)
@@ -413,10 +922,29 @@ namespace GUI.Forms
                 _tbMaxDim.Value = dim;
                 if (_lblMaxDimVal != null) _lblMaxDimVal.Text = $"{dim}%";
             }
+            UpdateAntiFlashControlsEnabled();
+
+            _chkSoundLock.Checked = _profile.SoundLockEnabled;
+            _chkEnableDsp.Checked = string.Equals(_profile.SoundLockMode, "dsp_lookahead", StringComparison.OrdinalIgnoreCase);
+            int bDb = Math.Clamp(_profile.SoundLockBoostDb, 0, 12);
+            _tbBoostDb.Value = bDb;
+            _lblBoostDbVal.Text = $"+{bDb} dB";
+
+            int sLimit = _profile.SoundLockThreshold > 0 ? _profile.SoundLockThreshold : 40;
+            _tbLimit.Value = Math.Clamp(sLimit, 5, 100);
+            _lblLimitVal.Text = $"{_tbLimit.Value}%";
+
+            _chkBalanceApps.Checked = _profile.SoundLockBalanceExternalApps;
+            _chkFastRecovery.Checked = _profile.SoundLockFastRecovery;
+
+            RefreshAudioEndpoints();
+            UpdateSoundLockControlsEnabled();
         }
 
         private string? _cachedCs2CfgDir = null;
         private bool _hasCheckedCs2CfgDir = false;
+        // Whether the installed GSI config is the current one (read once, cleared by Setup); null = not read yet
+        private bool? _cachedCfgCurrent = null;
 
         // cs2.exe located via the Setup folder picker; only written to ResultProfile on Save
         private string? _setupCs2ExePath = null;
@@ -454,8 +982,18 @@ namespace GUI.Forms
 
                 bool cfgOk = !string.IsNullOrEmpty(_cachedCs2CfgDir) && Utils.Cs2Helper.IsGsiConfigInstalled(_cachedCs2CfgDir);
                 bool regOk = Utils.Cs2Helper.IsGdiIcmGammaRangeUnlocked();
+                if (cfgOk && _cachedCfgCurrent == null)
+                {
+                    _cachedCfgCurrent = Utils.Cs2Helper.IsGsiConfigCurrent(_cachedCs2CfgDir!, _gsiListener?.Port ?? 23456);
+                }
 
-                if (cfgOk && regOk)
+                if (cfgOk && _cachedCfgCurrent == false)
+                {
+                    // Written by an older version (larger packets) or for another port
+                    _lblSetupStatus.Text = "⚠ GSI config outdated (Click Setup to update)";
+                    _lblSetupStatus.ForeColor = Color.FromArgb(180, 83, 9);
+                }
+                else if (cfgOk && regOk)
                 {
                     _lblSetupStatus.Text = "✓ Ready (0% Black Unlocked)";
                     _lblSetupStatus.ForeColor = Color.FromArgb(22, 163, 74);
@@ -535,6 +1073,7 @@ namespace GUI.Forms
 
             _cachedCs2CfgDir = cfgDir;
             _hasCheckedCs2CfgDir = true;
+            _cachedCfgCurrent = null;
             UpdateCs2StatusUi();
 
             string regInfo = regUnlocked
@@ -586,14 +1125,18 @@ namespace GUI.Forms
                     _gammaEngine.SaveState(out _prevGammaState);
                     _prevTargetDisplay = _gammaEngine.TargetDisplay;
                 }
-                _btnTest.Text = "Stop Test";
+                _btnTest.Text = "■ Stop Test";
+                _btnTest.BackColor = Color.FromArgb(254, 226, 226);
+                _btnTest.ForeColor = Color.FromArgb(185, 28, 28);
                 ApplyPreview();
             }
             else
             {
                 RevertPreview();
                 _isTesting = false;
-                _btnTest.Text = "Test";
+                _btnTest.Text = "Test Preview";
+                _btnTest.BackColor = Color.White;
+                _btnTest.ForeColor = SystemColors.ControlText;
             }
         }
 
@@ -601,8 +1144,9 @@ namespace GUI.Forms
         {
             if (!_isTesting) return;
 
-            var selected = _cmbDisplayTarget.SelectedItem as MonitorItem;
-            string? target = selected != null && selected.Connected ? selected.GdiName : DisplayTopology.GetPrimaryName();
+            string? target = _gameMonitorOnly
+                ? DisplayTopology.GetMonitorOfWindow(this.IsHandleCreated ? this.Handle : IntPtr.Zero) ?? DisplayTopology.GetPrimaryName()
+                : null;
 
             if (_vibrance is UnifiedVibranceEngine unified)
             {
@@ -631,6 +1175,10 @@ namespace GUI.Forms
 
         private void RevertPreview()
         {
+            _btnTest.Text = "Test Preview";
+            _btnTest.BackColor = Color.White;
+            _btnTest.ForeColor = SystemColors.ControlText;
+
             if (_vibrance != null)
             {
                 _vibrance.SetLevel(_prevVibranceLevel);
@@ -638,133 +1186,11 @@ namespace GUI.Forms
 
             if (_gammaEngine != null)
             {
-                // Reset every LUT before switching back, so the preview monitor is not left tinted
+                // Reset the LUTs the preview wrote before switching back, so its monitor is not left tinted
                 _gammaEngine.Restore();
                 _gammaEngine.SetTargetDisplay(_prevTargetDisplay);
                 _gammaEngine.RestoreState(in _prevGammaState);
             }
-        }
-
-        private sealed class MonitorItem
-        {
-            public string GdiName = "";
-            public string DevicePath = "";
-            public string FriendlyName = "";
-            public bool Connected = true;
-            public string Title = "";   // "1. DELL S2721DGF — Primary"
-            public string Detail = "";  // "DisplayPort (NVIDIA DVC)"
-            public override string ToString() => Detail.Length > 0 ? $"{Title} · {Detail}" : Title;
-        }
-
-        // Two lines per monitor (name, then connector + technology) so long names never widen the list past the dialog
-        private void DrawMonitorItem(object? sender, DrawItemEventArgs e)
-        {
-            if (e.Index < 0 || _cmbDisplayTarget.Items[e.Index] is not MonitorItem item) return;
-
-            // The closed box (edit portion) stays plain even when focused; only the hovered row in the open list is highlighted
-            bool isEditPortion = (e.State & DrawItemState.ComboBoxEdit) != 0;
-            bool highlighted = !isEditPortion && (e.State & DrawItemState.Selected) != 0;
-            Color back = highlighted ? SystemColors.Highlight : SystemColors.Window;
-            Color fore = highlighted ? SystemColors.HighlightText : SystemColors.WindowText;
-            using (var brush = new SolidBrush(back)) e.Graphics.FillRectangle(brush, e.Bounds);
-
-            var flags = TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.VerticalCenter;
-            var area = Rectangle.Inflate(e.Bounds, -4, -1);
-
-            if (item.Detail.Length == 0)
-            {
-                TextRenderer.DrawText(e.Graphics, item.Title, e.Font, area, fore, flags);
-            }
-            else
-            {
-                _monitorDetailFont ??= new Font(e.Font!.FontFamily, 8F, FontStyle.Regular, GraphicsUnit.Point);
-                int half = area.Height / 2;
-                TextRenderer.DrawText(e.Graphics, item.Title, e.Font, new Rectangle(area.X, area.Y, area.Width, half), fore, flags);
-                TextRenderer.DrawText(e.Graphics, item.Detail, _monitorDetailFont, new Rectangle(area.X, area.Y + half, area.Width, area.Height - half),
-                    highlighted ? fore : SystemColors.GrayText, flags);
-            }
-        }
-
-        // Lists the monitors currently connected, e.g. "1. DELL S2721DGF · DisplayPort (NVIDIA DVC) — Primary".
-        // A saved monitor that is unplugged right now stays selectable as "(not connected)" so the choice is kept.
-        private void PopulateMonitorList()
-        {
-            _cmbDisplayTarget.Items.Clear();
-            var unified = _vibrance as UnifiedVibranceEngine;
-
-            int index = 1;
-            var displays = DisplayTopology.GetDisplays();
-            foreach (var m in displays)
-            {
-                string tech = unified != null
-                    ? unified.DescribeTechnology(m)
-                    : UnifiedVibranceEngine.DescribeNonNvidia(m.AdapterName);
-                // Only NVIDIA DVC is per monitor. The DWM filter (Intel / AMD / no NVAPI) changes every screen, so with
-                // a second screen say so here instead of letting "Apply to" promise vibrance on this monitor only.
-                // Gamma and black flash still use this monitor's hardware LUT.
-                if (displays.Count > 1 && tech.Contains("DWM", StringComparison.OrdinalIgnoreCase))
-                {
-                    tech += ": vibrance on all screens";
-                }
-                _cmbDisplayTarget.Items.Add(new MonitorItem
-                {
-                    GdiName = m.GdiName,
-                    DevicePath = m.DevicePath,
-                    FriendlyName = m.FriendlyName,
-                    Title = $"{index}. {m.FriendlyName}{(m.IsPrimary ? " — Primary" : "")}",
-                    Detail = $"{m.Connection} ({tech})"
-                });
-                index++;
-            }
-
-            int selectedIndex = -1;
-            if (!string.IsNullOrEmpty(_profile.DisplayDevicePath))
-            {
-                for (int i = 0; i < _cmbDisplayTarget.Items.Count; i++)
-                {
-                    if (_cmbDisplayTarget.Items[i] is MonitorItem it &&
-                        string.Equals(it.DevicePath, _profile.DisplayDevicePath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        selectedIndex = i;
-                        break;
-                    }
-                }
-
-                if (selectedIndex < 0)
-                {
-                    // Same monitor plugged into another port: match by name when unambiguous
-                    int nameMatch = -1, count = 0;
-                    for (int i = 0; i < _cmbDisplayTarget.Items.Count; i++)
-                    {
-                        if (_cmbDisplayTarget.Items[i] is MonitorItem it &&
-                            !string.IsNullOrEmpty(_profile.DisplayName) &&
-                            string.Equals(it.FriendlyName, _profile.DisplayName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            nameMatch = i;
-                            count++;
-                        }
-                    }
-                    if (count == 1) selectedIndex = nameMatch;
-                }
-
-                if (selectedIndex < 0)
-                {
-                    string name = string.IsNullOrEmpty(_profile.DisplayName) ? "Saved monitor" : _profile.DisplayName;
-                    _cmbDisplayTarget.Items.Add(new MonitorItem
-                    {
-                        DevicePath = _profile.DisplayDevicePath,
-                        FriendlyName = _profile.DisplayName,
-                        Connected = false,
-                        Title = $"{name} (not connected)"
-                    });
-                    selectedIndex = _cmbDisplayTarget.Items.Count - 1;
-                }
-            }
-
-            // Default: the primary monitor (listed first)
-            if (selectedIndex < 0 && _cmbDisplayTarget.Items.Count > 0) selectedIndex = 0;
-            if (selectedIndex >= 0) _cmbDisplayTarget.SelectedIndex = selectedIndex;
-
         }
 
         private void OnSave()
@@ -773,6 +1199,12 @@ namespace GUI.Forms
             {
                 RevertPreview();
                 _isTesting = false;
+            }
+
+            string? outDevId = null;
+            if (_cmbOutputDevice.SelectedIndex >= 0 && _cmbOutputDevice.SelectedIndex < _audioEndpoints.Count)
+            {
+                outDevId = _audioEndpoints[_cmbOutputDevice.SelectedIndex].Id;
             }
 
             ResultProfile = new GameProfile
@@ -789,8 +1221,15 @@ namespace GUI.Forms
                 Cs2AntiFlashEnabled = _chkAntiFlash?.Checked ?? _profile.Cs2AntiFlashEnabled,
                 Cs2AntiSmokeEnabled = false,
                 Cs2AntiFlashMaxDim = _tbMaxDim?.Value ?? _profile.Cs2AntiFlashMaxDim,
-                DisplayDevicePath = (_cmbDisplayTarget.SelectedItem as MonitorItem)?.DevicePath ?? _profile.DisplayDevicePath,
-                DisplayName = (_cmbDisplayTarget.SelectedItem as MonitorItem)?.FriendlyName ?? _profile.DisplayName
+                SoundLockEnabled = _chkSoundLock.Checked,
+                SoundLockMode = _chkEnableDsp.Checked ? "dsp_lookahead" : "session",
+                SoundLockBoostDb = _tbBoostDb.Value,
+                SoundLockGameVolume = 60,
+                SoundLockThreshold = _tbLimit.Value,
+                SoundLockBalanceExternalApps = _chkBalanceApps.Checked,
+                SoundLockFastRecovery = _chkFastRecovery.Checked,
+                SoundLockLookaheadMs = 4,
+                SoundLockOutputDeviceId = outDevId
             };
 
             this.DialogResult = DialogResult.OK;

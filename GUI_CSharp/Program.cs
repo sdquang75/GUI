@@ -26,6 +26,8 @@ namespace GUI
 
         public static bool EnableLogging { get; set; } = false;
 
+        private static readonly object _logLock = new object();
+
         public static void Log(string msg)
         {
             if (!EnableLogging) return;
@@ -34,7 +36,11 @@ namespace GUI
                 string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GUI");
                 if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
                 string path = Path.Combine(logDir, "gui.log");
-                File.AppendAllText(path, $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n");
+                // Serialized: concurrent appends (GSI trace from pool threads) would otherwise drop lines on sharing errors
+                lock (_logLock)
+                {
+                    File.AppendAllText(path, $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n");
+                }
             }
             catch { }
         }
@@ -84,17 +90,6 @@ namespace GUI
 
             Log("Program.Main started with args: " + string.Join(" ", args));
 
-            if (args.Length >= 3 && args[0] == "--monitor-op")
-            {
-                string op = args[1].ToLowerInvariant();
-                string instanceId = args[2];
-                bool enable = (op == "enable");
-                var (success, msg) = Engine.MonitorEngine.SetDevNodeEnabledDirect(instanceId, enable);
-                Log($"--monitor-op {op} {instanceId} -> {success} ({msg})");
-                Environment.Exit(success ? 0 : 1);
-                return;
-            }
-
             if (args.Length >= 2 && args[0] == "--goodbyedpi-op")
             {
                 string op = args[1].ToLowerInvariant();
@@ -114,6 +109,33 @@ namespace GUI
                 if (int.TryParse(args[1], out int parentPid) && parentPid > 0)
                 {
                     Engine.GoodbyeDpiEngine.RunWatchdog(parentPid);
+                }
+                Environment.Exit(0);
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "--render-preview")
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                string outDir = args.Length > 1 ? args[1] : ".";
+
+                using (var f1 = new GameConfigForm("cs2.exe"))
+                {
+                    f1.Show();
+                    using var bmp = new System.Drawing.Bitmap(f1.Width, f1.Height);
+                    f1.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f1.Width, f1.Height));
+                    bmp.Save(Path.Combine(outDir, "cs2_preview.png"), System.Drawing.Imaging.ImageFormat.Png);
+                    f1.Close();
+                }
+
+                using (var f2 = new GameConfigForm("valorant.exe"))
+                {
+                    f2.Show();
+                    using var bmp = new System.Drawing.Bitmap(f2.Width, f2.Height);
+                    f2.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, f2.Width, f2.Height));
+                    bmp.Save(Path.Combine(outDir, "val_preview.png"), System.Drawing.Imaging.ImageFormat.Png);
+                    f2.Close();
                 }
                 Environment.Exit(0);
                 return;
@@ -149,11 +171,9 @@ namespace GUI
                 {
                     Console.WriteLine($"Display Resolution: {curRes.Value.Width}x{curRes.Value.Height} @ {curRes.Value.Frequency}Hz ({Engine.DisplayEngine.GetAspectRatioLabel(curRes.Value.Width, curRes.Value.Height)})");
                 }
-                var monitors = Engine.MonitorEngine.EnumerateMonitors();
-                Console.WriteLine($"Monitors detected: {monitors.Count}");
-                foreach (var m in monitors)
+                foreach (var d in Engine.DisplayTopology.GetDisplays())
                 {
-                    Console.WriteLine($"  - {m.FriendlyName} [{(m.Enabled ? "Enabled" : "Disabled")}] (ID: {m.InstanceId})");
+                    Console.WriteLine($"  - {d.GdiName}{(d.IsPrimary ? " (primary)" : "")} on {d.AdapterName}");
                 }
 
                 using var gsi = new Engine.Cs2GsiListener(23456);

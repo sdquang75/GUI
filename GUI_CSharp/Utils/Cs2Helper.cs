@@ -126,16 +126,11 @@ namespace GUI.Utils
             return null;
         }
 
-        public static (bool success, string cfgFile, string message) InstallGsiConfig(string cfgDir, int port = 23456)
-        {
-            try
-            {
-                if (!Directory.Exists(cfgDir))
-                {
-                    Directory.CreateDirectory(cfgDir);
-                }
+        private const string GsiConfigFileName = "gamestate_integration_vibe.cfg";
 
-                string content =
+        // Keep this exact component list. Black flash stopped working in CS2 when it was trimmed to provider +
+        // player_state, although the listener only reads player.state: CS2 needs the others for it to come through.
+        private static string BuildGsiConfig(int port) =>
 $@"""GUI Anti-Flashbang CS2 GSI""
 {{
     ""uri"" ""http://127.0.0.1:{port}""
@@ -153,8 +148,18 @@ $@"""GUI Anti-Flashbang CS2 GSI""
     }}
 }}
 ";
-                string targetFile = Path.Combine(cfgDir, "gamestate_integration_vibe.cfg");
-                File.WriteAllText(targetFile, content);
+
+        public static (bool success, string cfgFile, string message) InstallGsiConfig(string cfgDir, int port = 23456)
+        {
+            try
+            {
+                if (!Directory.Exists(cfgDir))
+                {
+                    Directory.CreateDirectory(cfgDir);
+                }
+
+                string targetFile = Path.Combine(cfgDir, GsiConfigFileName);
+                File.WriteAllText(targetFile, BuildGsiConfig(port));
                 return (true, targetFile, "GSI config written successfully");
             }
             catch (Exception ex)
@@ -205,8 +210,21 @@ $@"""GUI Anti-Flashbang CS2 GSI""
         {
             try
             {
-                string targetFile = Path.Combine(cfgDir, "gamestate_integration_vibe.cfg");
+                string targetFile = Path.Combine(cfgDir, GsiConfigFileName);
                 return File.Exists(targetFile);
+            }
+            catch { return false; }
+        }
+
+        // Installed config equals what Setup writes now (same port, current subscription list)
+        public static bool IsGsiConfigCurrent(string cfgDir, int port)
+        {
+            try
+            {
+                string targetFile = Path.Combine(cfgDir, GsiConfigFileName);
+                // Line endings ignored: the verbatim template gets CRLF or LF from how the source was checked out
+                return File.Exists(targetFile) &&
+                    File.ReadAllText(targetFile).Replace("\r\n", "\n") == BuildGsiConfig(port).Replace("\r\n", "\n");
             }
             catch { return false; }
         }

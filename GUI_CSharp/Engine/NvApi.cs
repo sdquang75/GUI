@@ -215,7 +215,10 @@ namespace GUI.Engine
 
             if (_getDvcInfoEx != null && _getDvcInfoEx(h, 0, ref info) == 0)
             {
-                info.currentLevel = MapPercentToHardware(level, info);
+                int target = MapPercentToHardware(level, info);
+                // Already there (re-apply 150 / 350 ms after focus, display change): no driver write, no re-sync
+                if (info.currentLevel == target) return true;
+                info.currentLevel = target;
             }
             else
             {

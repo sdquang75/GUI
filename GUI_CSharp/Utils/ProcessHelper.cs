@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text;
 
 namespace GUI.Utils
@@ -17,6 +18,20 @@ namespace GUI.Utils
         private static extern bool CloseHandle(IntPtr hObject);
 
         private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+        public static bool IsAdministrator()
+        {
+            try
+            {
+                using var identity = WindowsIdentity.GetCurrent();
+                var principal = new WindowsPrincipal(identity);
+                return principal.IsInRole(WindowsBuiltInRole.Administrator);
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         // Full exe path, or "" when it cannot be read with PROCESS_QUERY_LIMITED_INFORMATION.
         // Never falls back to Process.MainModule: that opens the process with PROCESS_VM_READ, the handle

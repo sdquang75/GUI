@@ -204,7 +204,7 @@ namespace GUI.Engine
         {
             // goodbyedpi.exe is always launched elevated. When elevated, extract under Program Files
             // (admin-only write) so a non-elevated process cannot swap the binaries before launch.
-            if (MonitorEngine.IsAdministrator())
+            if (Utils.ProcessHelper.IsAdministrator())
             {
                 try
                 {
@@ -297,7 +297,7 @@ namespace GUI.Engine
             }
 
             (bool Success, string Message) result;
-            if (MonitorEngine.IsAdministrator())
+            if (Utils.ProcessHelper.IsAdministrator())
             {
                 result = SetEnabledDirect(enable, currentPid, preset.Id);
             }
@@ -334,7 +334,7 @@ namespace GUI.Engine
 
             // 2. No watchdog handled it (e.g. goodbyedpi started outside this session): restart it ourselves.
             // The restarted process gets this session's watchdog, so from here on it stops on GUI exit.
-            var result = MonitorEngine.IsAdministrator()
+            var result = Utils.ProcessHelper.IsAdministrator()
                 ? RestartDirect(currentPid, preset.Id)
                 : RunElevatedHelper("restart", currentPid, preset.Id);
             if (!result.Success) return result;

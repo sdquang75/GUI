@@ -2,8 +2,9 @@ using System;
 
 namespace GUI.Engine
 {
-    // Vibrance through NVIDIA DVC when the NVIDIA driver controls the chosen monitor, otherwise through the DWM shader
-    // (desktop-wide: Intel / AMD, or NVAPI missing). Same engine choice as 1.1.3, applied per monitor.
+    // Vibrance through NVIDIA DVC when the NVIDIA driver controls the target monitor, otherwise through the DWM shader
+    // (desktop-wide: Intel / AMD, or NVAPI missing). Same engine choice as 1.1.3; the target is the monitor the game
+    // window is on with "Affect game monitor only", else every monitor.
     public class UnifiedVibranceEngine : IVibranceEngine
     {
         private const int NeutralLevel = 50;
@@ -127,24 +128,6 @@ namespace GUI.Engine
                 }
             }
             return false;
-        }
-
-        // Short label of how colors are applied on that monitor, shown next to it in the profile's monitor list
-        public string DescribeTechnology(DisplayInfo display)
-        {
-            lock (_lock)
-            {
-                return IsDvcOutput(display.GdiName) ? "NVIDIA DVC" : DescribeNonNvidia(display.AdapterName);
-            }
-        }
-
-        public static string DescribeNonNvidia(string adapterName)
-        {
-            if (adapterName.Contains("Intel", StringComparison.OrdinalIgnoreCase)) return "Intel · DWM";
-            if (adapterName.Contains("AMD", StringComparison.OrdinalIgnoreCase) ||
-                adapterName.Contains("Radeon", StringComparison.OrdinalIgnoreCase)) return "AMD · DWM";
-            if (adapterName.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)) return "NVIDIA · DWM";
-            return "DWM";
         }
 
         private bool SetDwm(int level)

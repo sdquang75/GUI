@@ -47,14 +47,32 @@ namespace GUI.Config
         [JsonPropertyName("cs2_antiflash_max_dim")]
         public int Cs2AntiFlashMaxDim { get; set; } = 100;
 
-        // Monitor this profile's gamma / black flash / vibrance applies to (the one the game is played on).
-        // Stable monitor device path from the DisplayConfig API; empty = primary monitor.
-        [JsonPropertyName("display_device_path")]
-        public string DisplayDevicePath { get; set; } = "";
+        [JsonPropertyName("sound_lock_enabled")]
+        public bool SoundLockEnabled { get; set; } = false;
 
-        // Friendly name of that monitor, used as a fallback match when it is plugged into another port
-        [JsonPropertyName("display_name")]
-        public string DisplayName { get; set; } = "";
+        [JsonPropertyName("sound_lock_game_volume")]
+        public int SoundLockGameVolume { get; set; } = 60;
+
+        [JsonPropertyName("sound_lock_threshold")]
+        public int SoundLockThreshold { get; set; } = 40;
+
+        [JsonPropertyName("sound_lock_balance_external_apps")]
+        public bool SoundLockBalanceExternalApps { get; set; } = true;
+
+        [JsonPropertyName("sound_lock_fast_recovery")]
+        public bool SoundLockFastRecovery { get; set; } = true;
+
+        [JsonPropertyName("sound_lock_mode")]
+        public string SoundLockMode { get; set; } = "dsp_lookahead";
+
+        [JsonPropertyName("sound_lock_boost_db")]
+        public int SoundLockBoostDb { get; set; } = 4;
+
+        [JsonPropertyName("sound_lock_lookahead_ms")]
+        public int SoundLockLookaheadMs { get; set; } = 4;
+
+        [JsonPropertyName("sound_lock_output_device_id")]
+        public string? SoundLockOutputDeviceId { get; set; } = null;
     }
 
     public class AppConfig
@@ -64,6 +82,11 @@ namespace GUI.Config
 
         [JsonPropertyName("autostart")]
         public bool Autostart { get; set; } = false;
+
+        // Like vibranceGUI's option: game vibrance, gamma / boost and black flash change only the monitor the game
+        // window is on, every other screen keeps the desktop look. Off = every monitor (1.1.3 behavior).
+        [JsonPropertyName("affect_game_monitor_only")]
+        public bool AffectGameMonitorOnly { get; set; } = false;
 
         [JsonPropertyName("goodbyedpi_mode")]
         public string GoodbyeDpiMode { get; set; } = "git_safe_reverse";
