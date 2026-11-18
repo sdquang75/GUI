@@ -51,7 +51,7 @@ namespace GUI.Config
         public bool SoundLockEnabled { get; set; } = false;
 
         [JsonPropertyName("sound_lock_game_volume")]
-        public int SoundLockGameVolume { get; set; } = 60;
+        public int SoundLockGameVolume { get; set; } = 70;
 
         [JsonPropertyName("sound_lock_threshold")]
         public int SoundLockThreshold { get; set; } = 40;
@@ -66,10 +66,10 @@ namespace GUI.Config
         public string SoundLockMode { get; set; } = "dsp_lookahead";
 
         [JsonPropertyName("sound_lock_boost_db")]
-        public int SoundLockBoostDb { get; set; } = 4;
+        public int SoundLockBoostDb { get; set; } = 0; // no longer applied (kept so old configs load)
 
         [JsonPropertyName("sound_lock_lookahead_ms")]
-        public int SoundLockLookaheadMs { get; set; } = 4;
+        public int SoundLockLookaheadMs { get; set; } = 5;
 
         [JsonPropertyName("sound_lock_output_device_id")]
         public string? SoundLockOutputDeviceId { get; set; } = null;

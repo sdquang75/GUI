@@ -53,6 +53,31 @@ namespace GUI.Engine.Audio
     {
         [FieldOffset(0)] public ushort vt;
         [FieldOffset(8)] public IntPtr pwszVal;
+        [FieldOffset(8)] public uint ulVal;
+        [FieldOffset(8)] public short boolVal;
+    }
+
+    // Same COM class the Sound control panel uses to change the default device (no admin needed).
+    // Layout checked against EarTrumpet's IPolicyConfig (Win7..Win11); only the last two methods are called.
+    [ComImport, Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")]
+    public class PolicyConfigClientComObject { }
+
+    [Guid("F8679F50-850A-41CF-9C72-430F290290C8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    public interface IPolicyConfig
+    {
+        [PreserveSig] int Unused1();
+        [PreserveSig] int Unused2();
+        [PreserveSig] int Unused3();
+        [PreserveSig] int Unused4();
+        [PreserveSig] int Unused5();
+        [PreserveSig] int Unused6();
+        [PreserveSig] int Unused7();
+        [PreserveSig] int Unused8();
+        [PreserveSig] int UnusedGetPropertyValue();
+        [PreserveSig] int UnusedSetPropertyValue();
+        [PreserveSig] int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string wszDeviceId, ERole eRole);
+        // Enable / Disable of a device in the Sound control panel
+        [PreserveSig] int SetEndpointVisibility([MarshalAs(UnmanagedType.LPWStr)] string wszDeviceId, short isVisible);
     }
 
     [Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

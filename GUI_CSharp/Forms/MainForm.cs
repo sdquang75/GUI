@@ -36,8 +36,9 @@ namespace GUI.Forms
         private GammaEngine _gammaEngine;
         private ActiveWindowObserver _observer;
         private Cs2GsiListener _gsiListener;
-        private readonly SessionSoundLockEngine _soundLockEngine = new();
         private readonly LookaheadDspEngine _lookaheadDspEngine = new();
+        private readonly GameVolumeController _gameVolume = new();
+        private bool _dspFaulted;
         private EventWaitHandle? _showWindowEvent;
         private RegisteredWaitHandle? _showWindowWaitHandle;
 
@@ -129,6 +130,7 @@ namespace GUI.Forms
                     }
 
                     _gammaEngine.EnforceIfNeeded();
+                    _gameVolume.Rescan(); // apps that started playing since the game got focus
                 }
             };
 
@@ -166,6 +168,7 @@ namespace GUI.Forms
             {
                 Program.Log("MainForm.Load fired");
                 ClearStaleAudioRoutingAtStartup();
+                _lookaheadDspEngine.Faulted += OnDspFaulted;
                 InitObserver();
                 RefreshCurrentResolution(rebuildButtons: true);
                 NotifyConfigRecovery();
@@ -1033,61 +1036,216 @@ namespace GUI.Forms
             UpdateObserverStatus();
         }
 
-        // Sound Lock (anti-deaf / footstep booster). DSP mode routes the game into the Virtual Cable and renders the
-        // processed signal to the physical DAC; every other path must leave the game on its normal output.
+        // Sound Lock: a ceiling on the game's peaks through a short lookahead buffer (game -> Virtual Cable -> limiter
+        // -> DAC), so the gain is already down when a gunshot plays, plus the game master volume while it is in front.
+        // Nothing else: no boost, no EQ, no loudness.
+        //
+        // - The limiter and the routing live as long as the game PROCESS (alt-tab only switches the volume), so the
+        //   game's audio stream is not moved back and forth on every focus change.
+        // - The game volume is only raised once the game's stream is confirmed on the cable. A raised volume without the
+        //   ceiling in the path (game set to another device in its own settings, routing lost) would be ear-splitting,
+        //   so that case falls back to the desktop volume at once.
+        private sealed record LimiterSession(string Exe, int Pid, string CableRenderId, string OutputId);
+        private sealed record GameVolumeTarget(float Volume, bool KeepOthers);
+
+        private LimiterSession? _limiterSession;
+        private ProcessExitWatcher? _limiterExitWatcher;
+        private GameVolumeTarget? _gameVolumeTarget;   // set while the game is in front
+        private bool _gameVolumeDirty;
+        private bool _bypassRerouteTried;
+        private bool _bypassLogged;
+        private long _routedAtTick;
+        private int _pathCheckCount;
+        private System.Windows.Forms.Timer? _audioPathTimer;
+
         private void ApplySoundLock(string exe, GameProfile prof)
         {
             int pid = _currentGamePid;
-            float threshold = (prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40) / 100.0f;
-            bool useSessionLock = prof.SoundLockEnabled;
-
-            if (prof.SoundLockEnabled && pid > 0 &&
-                string.Equals(prof.SoundLockMode, "dsp_lookahead", StringComparison.OrdinalIgnoreCase))
+            if (!prof.SoundLockEnabled || pid <= 0)
             {
-                var (cableRenderId, cableCaptureId) = AudioEndpointHelper.GetVirtualCableEndpoints();
-                // Resolved before routing: with no physical output the DSP cannot run and the game would go silent
-                string? outputId = string.IsNullOrEmpty(cableRenderId) || string.IsNullOrEmpty(cableCaptureId)
-                    ? null
-                    : AudioEndpointHelper.ResolveDspOutputDeviceId(prof.SoundLockOutputDeviceId, cableRenderId);
+                StopSoundLock(keepRoutingMarker: false);
+                ClearStaleAudioRouting(exe, pid);
+                return;
+            }
 
-                if (outputId != null && RouteGameAudioToCable(exe, pid, cableRenderId!))
+            float ceiling = Math.Clamp(prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40, 5, 100) / 100.0f;
+            float gameVolume = Math.Clamp(prof.SoundLockGameVolume > 0 ? prof.SoundLockGameVolume : 70, 1, 100) / 100.0f;
+            int lookaheadMs = prof.SoundLockLookaheadMs > 0 ? prof.SoundLockLookaheadMs : 5;
+
+            if (!EnsureLimiter(exe, pid, prof.SoundLockOutputDeviceId, ceiling, lookaheadMs))
+            {
+                // No ceiling possible -> no raised volume either; the game plays as if Sound Lock were off
+                StopSoundLock(keepRoutingMarker: false);
+                ClearStaleAudioRouting(exe, pid);
+                return;
+            }
+
+            _gameVolumeTarget = new GameVolumeTarget(gameVolume, prof.SoundLockBalanceExternalApps);
+            _gameVolumeDirty = true;
+            CheckGameAudioPath();
+        }
+
+        private bool EnsureLimiter(string exe, int pid, string? preferredOutputId, float ceiling, int lookaheadMs)
+        {
+            if (_dspFaulted) return false;
+
+            var (cableRenderId, cableCaptureId) = AudioEndpointHelper.GetVirtualCableEndpoints();
+            string? outputId = string.IsNullOrEmpty(cableRenderId) || string.IsNullOrEmpty(cableCaptureId)
+                ? null
+                : AudioEndpointHelper.ResolveDspOutputDeviceId(preferredOutputId, cableRenderId);
+            if (outputId == null)
+            {
+                Program.Log("[AudioRouting] Virtual Cable or physical output missing -> Sound Lock inactive.");
+                return false;
+            }
+
+            string? cableIssue = AudioEndpointHelper.GetCableInputIssue(cableRenderId);
+            if (cableIssue != null) Program.Log($"[AudioRouting] Warning: {cableIssue}");
+
+            // Pipeline first, routing second: the game must never land in a cable nobody reads.
+            // Same devices -> only the ceiling is updated live, no restart.
+            if (!_lookaheadDspEngine.Start(cableCaptureId!, outputId, ceiling, lookaheadMs))
+            {
+                Program.Log("[AudioRouting] Lookahead pipeline could not start -> Sound Lock inactive.");
+                return false;
+            }
+            if (!RouteGameAudioToCable(exe, pid, cableRenderId!))
+            {
+                Program.Log("[AudioRouting] Routing the game to the Virtual Cable failed -> Sound Lock inactive.");
+                _lookaheadDspEngine.Stop();
+                return false;
+            }
+
+            if (_limiterSession?.Pid != pid)
+            {
+                // Follows the game while it is in the background too: its exit ends the limiter and the routing
+                _limiterExitWatcher?.Dispose();
+                _limiterExitWatcher = ProcessExitWatcher.TryStart(pid, exe, () => OnLimitedGameExited(pid));
+                _bypassRerouteTried = false;
+                _bypassLogged = false;
+            }
+            _limiterSession = new LimiterSession(exe, pid, cableRenderId!, outputId);
+
+            if (_audioPathTimer == null)
+            {
+                _audioPathTimer = new System.Windows.Forms.Timer { Interval = 250 };
+                _audioPathTimer.Tick += (s, e) => { if (!_isCleanedUp) CheckGameAudioPath(); };
+            }
+            _audioPathTimer.Start();
+            return true;
+        }
+
+        // Where is the game's audio stream actually playing? Runs on focus and 4x per second while a limiter is up.
+        private void CheckGameAudioPath()
+        {
+            var lim = _limiterSession;
+            if (lim == null)
+            {
+                _audioPathTimer?.Stop();
+                return;
+            }
+
+            // Without an exit watcher (process could not be opened) poll the process about once a second
+            if (_limiterExitWatcher == null && (++_pathCheckCount % 4) == 0 &&
+                !string.Equals(ProcessHelper.GetProcessExeName(lim.Pid), lim.Exe, StringComparison.OrdinalIgnoreCase))
+            {
+                Program.Log($"[AudioRouting] {lim.Exe} (PID {lim.Pid}) is gone -> Sound Lock off");
+                StopSoundLock(keepRoutingMarker: false);
+                return;
+            }
+
+            var devices = AudioEndpointHelper.GetDevicesPlayingFor(lim.Pid);
+            bool onCable = devices.Exists(d => string.Equals(d, lim.CableRenderId, StringComparison.OrdinalIgnoreCase));
+            bool elsewhere = devices.Exists(d => !string.Equals(d, lim.CableRenderId, StringComparison.OrdinalIgnoreCase));
+
+            if (onCable)
+            {
+                _bypassRerouteTried = false;
+                _bypassLogged = false;
+                var target = _gameVolumeTarget;
+                if (target != null && (_gameVolumeDirty || !_gameVolume.IsActive))
                 {
-                    _soundLockEngine.Stop();
-                    _lookaheadDspEngine.Start(
-                        cableCaptureId,
-                        outputId,
-                        threshold,
-                        prof.SoundLockBoostDb,
-                        prof.SoundLockLookaheadMs,
-                        prof.SoundLockFastRecovery ? 45.0f : 120.0f
-                    );
-                    return;
+                    _gameVolume.Apply(lim.OutputId, target.Volume, target.KeepOthers, lim.Pid);
+                    _gameVolumeDirty = false;
+                }
+            }
+            else if (elsewhere)
+            {
+                // The game plays straight to a device: no ceiling in the path, so no raised volume
+                if (_gameVolume.IsActive)
+                {
+                    _gameVolume.Restore();
+                    _gameVolumeDirty = true;
+                }
+                if (!_bypassLogged)
+                {
+                    _bypassLogged = true;
+                    Program.Log($"[AudioRouting] {lim.Exe} plays outside the limiter ({string.Join(", ", devices)}) -> desktop volume");
                 }
 
-                Program.Log(outputId == null
-                    ? "[AudioRouting] Virtual Cable or physical output missing -> SessionSoundLockEngine fallback."
-                    : "[AudioRouting] Routing the game to the Virtual Cable failed -> SessionSoundLockEngine fallback.");
+                // Right after routing the stream may still be moving; after that, try routing once more (a device
+                // picked in the game's own settings wins over this, then it simply stays at desktop volume)
+                if (!_bypassRerouteTried && Environment.TickCount64 - _routedAtTick > 1500)
+                {
+                    _bypassRerouteTried = true;
+                    _routedGamePid = 0;
+                    RouteGameAudioToCable(lim.Exe, lim.Pid, lim.CableRenderId);
+                }
             }
+            // Neither: the game has no running stream yet -> nothing to raise
+        }
 
-            // Not (or no longer) in DSP mode: the game must play on its normal output again
+        // Focus left the game but it keeps running: desktop volume, limiter and routing stay
+        private void LeaveGameFocus()
+        {
+            _gameVolumeTarget = null;
+            _gameVolume.Restore();
+        }
+
+        // Exit watcher of the limited game (thread pool)
+        private void OnLimitedGameExited(int pid)
+        {
+            if (this.IsDisposed || _isCleanedUp || !this.IsHandleCreated) return;
+            try
+            {
+                this.BeginInvoke((MethodInvoker)delegate
+                {
+                    if (this.IsDisposed || _isCleanedUp || _limiterSession?.Pid != pid) return;
+                    Program.Log($"[AudioRouting] Limited game (PID {pid}) exited -> Sound Lock off");
+                    StopSoundLock(keepRoutingMarker: false);
+                });
+            }
+            catch { }
+        }
+
+        private void StopSoundLock(bool keepRoutingMarker)
+        {
+            _audioPathTimer?.Stop();
+            _limiterExitWatcher?.Dispose();
+            _limiterExitWatcher = null;
+            _limiterSession = null;
+            _gameVolumeTarget = null;
             _lookaheadDspEngine.Stop();
-            ClearGameAudioRouting();
-            ClearStaleAudioRouting(exe, pid);
+            ClearGameAudioRouting(keepRoutingMarker);
+            _gameVolume.Restore();
+        }
 
-            if (useSessionLock && pid > 0)
+        // DSP thread: the pipeline died (DAC unplugged, audio service restarted...). Put the game back on its normal
+        // output at desktop volume until the game is focused again.
+        private void OnDspFaulted()
+        {
+            if (this.IsDisposed || _isCleanedUp || !this.IsHandleCreated) return;
+            try
             {
-                _soundLockEngine.Start(
-                    pid,
-                    (prof.SoundLockGameVolume > 0 ? prof.SoundLockGameVolume : 60) / 100.0f,
-                    threshold,
-                    prof.SoundLockBalanceExternalApps,
-                    prof.SoundLockFastRecovery
-                );
+                this.BeginInvoke((MethodInvoker)delegate
+                {
+                    if (this.IsDisposed || _isCleanedUp) return;
+                    Program.Log("[AudioRouting] Lookahead pipeline failed -> Sound Lock off until the next focus");
+                    _dspFaulted = true;
+                    StopSoundLock(keepRoutingMarker: false);
+                });
             }
-            else
-            {
-                _soundLockEngine.Stop();
-            }
+            catch { }
         }
 
         private bool RouteGameAudioToCable(string exe, int pid, string cableRenderId)
@@ -1105,6 +1263,7 @@ namespace GUI.Forms
             }
 
             _routedGamePid = pid;
+            _routedAtTick = Environment.TickCount64;
             Program.Log($"[AudioRouting] Routed PID {pid} ({exe}) to Virtual Cable: {cableRenderId}");
             return true;
         }
@@ -1424,14 +1583,15 @@ namespace GUI.Forms
         private void ResetToDesktop()
         {
             if (_isCleanedUp) return;
-            ClearGameAudioRouting(keepMarker: true);
+            // Alt-tab / another app in front: desktop volume; the limiter keeps running for the game in the background
+            // and stops on its own when the game exits
+            LeaveGameFocus();
+            _dspFaulted = false;
             _currentGameExe = null;
             _currentGamePid = 0;
             _currentGameHwnd = IntPtr.Zero;
             _currentGameProfile = null;
             StopWatchingGameProcess();
-            _soundLockEngine.Stop();
-            _lookaheadDspEngine.Stop();
             _gammaEnforceTimer?.Stop();
             _vibrance.Restore();
             // Reset every LUT first, then drop the target, so the game curve never spreads to all monitors
@@ -1512,8 +1672,7 @@ namespace GUI.Forms
                 try { _gammaEnforceTimer?.Stop(); } catch { }
                 try { _gammaEnforceTimer?.Dispose(); } catch { }
                 try { StopWatchingGameProcess(); } catch { }
-                try { ClearGameAudioRouting(); } catch { }
-                try { _soundLockEngine.Dispose(); } catch { }
+                try { StopSoundLock(keepRoutingMarker: false); } catch { }
                 try { _lookaheadDspEngine.Dispose(); } catch { }
                 try { _observer.Stop(); } catch { }
 
@@ -1553,6 +1712,7 @@ namespace GUI.Forms
                 try { _displayChangeTimer?.Dispose(); } catch { }
                 try { _statusLabelTimer?.Stop(); } catch { }
                 try { _statusLabelTimer?.Dispose(); } catch { }
+                try { _audioPathTimer?.Dispose(); } catch { }
                 try
                 {
                     _pnlResGrid?.Controls.Clear();
