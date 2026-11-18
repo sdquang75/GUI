@@ -59,6 +59,10 @@ namespace GUI.Forms
         // Written on the UI thread only; volatile because the GSI threads read it on every packet
         private volatile string? _currentGameExe = null;
         private int _currentGamePid = 0;
+
+        // Game process whose audio output this app routed to the Virtual Cable (0 = none). Only this PID is ever
+        // reset, so profiles without DSP never touch the per-app device choice.
+        private int _routedGamePid = 0;
         // Window the observer reported for the running game (UI thread only): tells which monitor it is on
         private IntPtr _currentGameHwnd = IntPtr.Zero;
         // Resets to the desktop the moment the current game's process exits (null: polled by _gammaEnforceTimer)
@@ -161,6 +165,7 @@ namespace GUI.Forms
             this.Load += (s, e) =>
             {
                 Program.Log("MainForm.Load fired");
+                ClearStaleAudioRoutingAtStartup();
                 InitObserver();
                 RefreshCurrentResolution(rebuildButtons: true);
                 NotifyConfigRecovery();
@@ -964,9 +969,14 @@ namespace GUI.Forms
                     {
                         ApplyGameProfile(matchedExe, matchedProf, pid, hwnd);
                     }
-                    else if (_currentGameExe != null)
+                    else
                     {
-                        ResetToDesktop();
+                        if (_currentGameExe != null)
+                        {
+                            ResetToDesktop();
+                        }
+                        // Routed by an earlier run (crash / game exit) and its profile is gone: give it its sound back
+                        ClearStaleAudioRouting(exeName, pid);
                     }
                 });
             }
@@ -1014,72 +1024,160 @@ namespace GUI.Forms
             // Always start watchdog timer while game profile is active to enforce process liveness & gamma
             _gammaEnforceTimer?.Start();
 
-            // Sound Lock Engine (Anti-Deaf / Footsteps booster)
-            if (prof.SoundLockEnabled)
-            {
-                if (string.Equals(prof.SoundLockMode, "dsp_lookahead", StringComparison.OrdinalIgnoreCase))
-                {
-                    _soundLockEngine.Stop();
-                    var (cableRenderId, cableCaptureId) = GUI.Engine.Audio.AudioEndpointHelper.GetVirtualCableEndpoints();
-                    if (!string.IsNullOrEmpty(cableRenderId) && !string.IsNullOrEmpty(cableCaptureId))
-                    {
-                        if (_currentGamePid > 0)
-                        {
-                            GUI.Engine.Audio.AudioPolicyConfig.SetAppOutputEndpoint((uint)_currentGamePid, cableRenderId);
-                            Program.Log($"[AudioRouting] Routed PID {_currentGamePid} ({exe}) to Virtual Cable: {cableRenderId}");
-                        }
-
-                        _lookaheadDspEngine.Start(
-                            cableCaptureId,
-                            prof.SoundLockOutputDeviceId,
-                            (prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40) / 100.0f,
-                            prof.SoundLockBoostDb,
-                            prof.SoundLockLookaheadMs,
-                            prof.SoundLockFastRecovery ? 45.0f : 120.0f
-                        );
-                    }
-                    else
-                    {
-                        Program.Log("[AudioRouting] Virtual Cable not installed. Falling back to SessionSoundLockEngine.");
-                        if (_currentGamePid > 0)
-                        {
-                            _soundLockEngine.Start(
-                                _currentGamePid,
-                                (prof.SoundLockGameVolume > 0 ? prof.SoundLockGameVolume : 60) / 100.0f,
-                                (prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40) / 100.0f,
-                                prof.SoundLockBalanceExternalApps,
-                                prof.SoundLockFastRecovery
-                            );
-                        }
-                    }
-                }
-                else if (_currentGamePid > 0)
-                {
-                    _lookaheadDspEngine.Stop();
-                    _soundLockEngine.Start(
-                        _currentGamePid,
-                        (prof.SoundLockGameVolume > 0 ? prof.SoundLockGameVolume : 60) / 100.0f,
-                        (prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40) / 100.0f,
-                        prof.SoundLockBalanceExternalApps,
-                        prof.SoundLockFastRecovery
-                    );
-                }
-            }
-            else
-            {
-                if (_currentGamePid > 0)
-                {
-                    GUI.Engine.Audio.AudioPolicyConfig.ResetAppOutputEndpoint((uint)_currentGamePid);
-                }
-                _soundLockEngine.Stop();
-                _lookaheadDspEngine.Stop();
-            }
+            ApplySoundLock(exe, prof);
 
             // Counteract DirectX / GPU driver swapchain reset when Alt-Tabbing back into exclusive fullscreen
             ScheduleReapply(exe, prof, 150);
             ScheduleReapply(exe, prof, 350);
 
             UpdateObserverStatus();
+        }
+
+        // Sound Lock (anti-deaf / footstep booster). DSP mode routes the game into the Virtual Cable and renders the
+        // processed signal to the physical DAC; every other path must leave the game on its normal output.
+        private void ApplySoundLock(string exe, GameProfile prof)
+        {
+            int pid = _currentGamePid;
+            float threshold = (prof.SoundLockThreshold > 0 ? prof.SoundLockThreshold : 40) / 100.0f;
+            bool useSessionLock = prof.SoundLockEnabled;
+
+            if (prof.SoundLockEnabled && pid > 0 &&
+                string.Equals(prof.SoundLockMode, "dsp_lookahead", StringComparison.OrdinalIgnoreCase))
+            {
+                var (cableRenderId, cableCaptureId) = AudioEndpointHelper.GetVirtualCableEndpoints();
+                // Resolved before routing: with no physical output the DSP cannot run and the game would go silent
+                string? outputId = string.IsNullOrEmpty(cableRenderId) || string.IsNullOrEmpty(cableCaptureId)
+                    ? null
+                    : AudioEndpointHelper.ResolveDspOutputDeviceId(prof.SoundLockOutputDeviceId, cableRenderId);
+
+                if (outputId != null && RouteGameAudioToCable(exe, pid, cableRenderId!))
+                {
+                    _soundLockEngine.Stop();
+                    _lookaheadDspEngine.Start(
+                        cableCaptureId,
+                        outputId,
+                        threshold,
+                        prof.SoundLockBoostDb,
+                        prof.SoundLockLookaheadMs,
+                        prof.SoundLockFastRecovery ? 45.0f : 120.0f
+                    );
+                    return;
+                }
+
+                Program.Log(outputId == null
+                    ? "[AudioRouting] Virtual Cable or physical output missing -> SessionSoundLockEngine fallback."
+                    : "[AudioRouting] Routing the game to the Virtual Cable failed -> SessionSoundLockEngine fallback.");
+            }
+
+            // Not (or no longer) in DSP mode: the game must play on its normal output again
+            _lookaheadDspEngine.Stop();
+            ClearGameAudioRouting();
+            ClearStaleAudioRouting(exe, pid);
+
+            if (useSessionLock && pid > 0)
+            {
+                _soundLockEngine.Start(
+                    pid,
+                    (prof.SoundLockGameVolume > 0 ? prof.SoundLockGameVolume : 60) / 100.0f,
+                    threshold,
+                    prof.SoundLockBalanceExternalApps,
+                    prof.SoundLockFastRecovery
+                );
+            }
+            else
+            {
+                _soundLockEngine.Stop();
+            }
+        }
+
+        private bool RouteGameAudioToCable(string exe, int pid, string cableRenderId)
+        {
+            if (_routedGamePid == pid) return true;
+            ClearGameAudioRouting(); // another game (or an older instance) was routed
+
+            // Marked BEFORE the call: if this app dies right after, the next run still knows to undo it
+            SetAudioRoutedExe(exe);
+            if (!AudioPolicyConfig.SetAppOutputEndpoint((uint)pid, cableRenderId))
+            {
+                // Undo a half-applied call (one of the two roles may have been set)
+                if (AudioPolicyConfig.ResetAppOutputEndpoint((uint)pid)) SetAudioRoutedExe(null);
+                return false;
+            }
+
+            _routedGamePid = pid;
+            Program.Log($"[AudioRouting] Routed PID {pid} ({exe}) to Virtual Cable: {cableRenderId}");
+            return true;
+        }
+
+        // Puts the routed game back on the default output. Only possible while that process is alive; if it already
+        // exited the marker stays and the reset happens the next time the exe is seen.
+        // keepMarker: alt-tab away re-routes on the way back, so skip the two config writes per alt-tab; a marker
+        // left set while the routing is already undone only costs one harmless extra reset later.
+        private void ClearGameAudioRouting(bool keepMarker = false)
+        {
+            int pid = _routedGamePid;
+            if (pid == 0) return;
+            _routedGamePid = 0;
+
+            if (AudioPolicyConfig.ResetAppOutputEndpoint((uint)pid))
+            {
+                Program.Log($"[AudioRouting] PID {pid} back on the default output");
+                if (!keepMarker) SetAudioRoutedExe(null);
+            }
+            else
+            {
+                Program.Log($"[AudioRouting] Could not reset PID {pid} (exited?) -> retry when {_config.AudioRoutedExe} runs again");
+            }
+        }
+
+        // A routing left behind by an earlier run or by a game that exited while routed: reset it through any live
+        // instance of that exe
+        private void ClearStaleAudioRouting(string? exe, int pid)
+        {
+            string? routedExe = _config.AudioRoutedExe;
+            if (pid <= 0 || pid == _routedGamePid || string.IsNullOrEmpty(routedExe) ||
+                !string.Equals(exe, routedExe, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (AudioPolicyConfig.ResetAppOutputEndpoint((uint)pid))
+            {
+                Program.Log($"[AudioRouting] Cleared stale Virtual Cable routing of {routedExe} (PID {pid})");
+                SetAudioRoutedExe(null);
+            }
+        }
+
+        private void ClearStaleAudioRoutingAtStartup()
+        {
+            string? routedExe = _config.AudioRoutedExe;
+            if (string.IsNullOrEmpty(routedExe)) return;
+
+            Process[] procs = Array.Empty<Process>();
+            try
+            {
+                procs = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(routedExe));
+                foreach (var p in procs)
+                {
+                    ClearStaleAudioRouting(routedExe, p.Id);
+                    if (_config.AudioRoutedExe == null) break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.Log($"[AudioRouting] Startup cleanup failed: {ex.Message}");
+            }
+            finally
+            {
+                foreach (var p in procs) p.Dispose();
+            }
+        }
+
+        private void SetAudioRoutedExe(string? exe)
+        {
+            if (string.Equals(_config.AudioRoutedExe, exe, StringComparison.OrdinalIgnoreCase)) return;
+            _config.AudioRoutedExe = exe;
+            try { ConfigManager.Save(_config); } catch (Exception ex) { Program.Log($"[AudioRouting] Config save failed: {ex.Message}"); }
         }
 
         private bool IsCurrentGameRunning()
@@ -1326,10 +1424,7 @@ namespace GUI.Forms
         private void ResetToDesktop()
         {
             if (_isCleanedUp) return;
-            if (_currentGamePid > 0)
-            {
-                GUI.Engine.Audio.AudioPolicyConfig.ResetAppOutputEndpoint((uint)_currentGamePid);
-            }
+            ClearGameAudioRouting(keepMarker: true);
             _currentGameExe = null;
             _currentGamePid = 0;
             _currentGameHwnd = IntPtr.Zero;
@@ -1417,6 +1512,7 @@ namespace GUI.Forms
                 try { _gammaEnforceTimer?.Stop(); } catch { }
                 try { _gammaEnforceTimer?.Dispose(); } catch { }
                 try { StopWatchingGameProcess(); } catch { }
+                try { ClearGameAudioRouting(); } catch { }
                 try { _soundLockEngine.Dispose(); } catch { }
                 try { _lookaheadDspEngine.Dispose(); } catch { }
                 try { _observer.Stop(); } catch { }

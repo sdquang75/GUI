@@ -119,6 +119,7 @@ namespace GUI.Engine.Audio
             try
             {
                 var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorComObject();
+                var (cableRenderId, cableCaptureId) = AudioEndpointHelper.GetVirtualCableEndpoints();
 
                 // 1. Resolve Capture Device (Virtual Audio Cable output endpoint)
                 IMMDevice? captureDev = null;
@@ -126,14 +127,9 @@ namespace GUI.Engine.Audio
                 {
                     enumerator.GetDevice(_captureDeviceId, out captureDev);
                 }
-                if (captureDev == null)
+                if (captureDev == null && !string.IsNullOrEmpty(cableCaptureId))
                 {
-                    // Search for Virtual Cable recording endpoint
-                    var (_, capId) = AudioEndpointHelper.GetVirtualCableEndpoints();
-                    if (!string.IsNullOrEmpty(capId))
-                    {
-                        enumerator.GetDevice(capId, out captureDev);
-                    }
+                    enumerator.GetDevice(cableCaptureId, out captureDev);
                 }
                 if (captureDev == null)
                 {
@@ -141,42 +137,17 @@ namespace GUI.Engine.Audio
                     return;
                 }
 
-                // 2. Resolve Render Device (Physical DAC - Sound BlasterX G6 or chosen device)
+                // 2. Resolve Render Device (physical DAC). Never the cable's playback side: VB-CABLE often becomes
+                // the default device on install, and rendering into it would feed the output back into the capture.
+                string? renderId = AudioEndpointHelper.ResolveDspOutputDeviceId(_renderDeviceId, cableRenderId);
                 IMMDevice? renderDev = null;
-                if (!string.IsNullOrEmpty(_renderDeviceId))
+                if (!string.IsNullOrEmpty(renderId))
                 {
-                    enumerator.GetDevice(_renderDeviceId, out renderDev);
+                    enumerator.GetDevice(renderId, out renderDev);
                 }
                 if (renderDev == null)
                 {
-                    // Auto-detect Sound BlasterX G6
-                    enumerator.EnumAudioEndpoints(EDataFlow.eRender, 1, out var col);
-                    if (col != null)
-                    {
-                        col.GetCount(out int count);
-                        for (int i = 0; i < count; i++)
-                        {
-                            if (col.Item(i, out var d) == 0 && d != null)
-                            {
-                                d.GetId(out string id);
-                                string name = AudioEndpointHelper.GetDeviceFriendlyName(d);
-                                if (name.Contains("Sound BlasterX G6", StringComparison.OrdinalIgnoreCase) ||
-                                    id.Contains("35862ba1-5b8c-4d8f-827b-97bbbf2d6d9f", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    renderDev = d;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                if (renderDev == null)
-                {
-                    enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out renderDev);
-                }
-                if (renderDev == null)
-                {
-                    Program.Log("[LookaheadDsp] Could not find render device");
+                    Program.Log("[LookaheadDsp] No physical output device (only virtual cables are active) -> DSP not started");
                     return;
                 }
 

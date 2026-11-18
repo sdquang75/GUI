@@ -44,9 +44,7 @@ namespace GUI.Engine.Audio
                             bool isG6 = name.Contains("Sound BlasterX G6", StringComparison.OrdinalIgnoreCase) ||
                                         id.Contains("35862ba1-5b8c-4d8f-827b-97bbbf2d6d9f", StringComparison.OrdinalIgnoreCase);
 
-                            bool isCable = name.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase) ||
-                                           name.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase) ||
-                                           name.Contains("Virtual Cable", StringComparison.OrdinalIgnoreCase);
+                            bool isCable = IsVirtualCableRenderName(name);
 
                             list.Add(new AudioEndpointInfo
                             {
@@ -65,6 +63,36 @@ namespace GUI.Engine.Audio
                 Program.Log($"[AudioEndpointHelper] GetRenderEndpoints error: {ex.Message}");
             }
             return list;
+        }
+
+        // Playback side of a virtual cable: never a valid DSP output, it feeds straight back into the capture side
+        public static bool IsVirtualCableRenderName(string name) =>
+            name.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("Virtual Cable", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Physical output the DSP renders to: the preferred device if it is active and not a virtual cable,
+        /// else Sound BlasterX G6, else the default device, else any other active output. Null if only cables exist.
+        /// </summary>
+        public static string? ResolveDspOutputDeviceId(string? preferredId, string? cableRenderId)
+        {
+            var endpoints = GetRenderEndpoints();
+            bool Usable(AudioEndpointInfo e) =>
+                !e.IsVirtualCable && !string.Equals(e.Id, cableRenderId, StringComparison.OrdinalIgnoreCase);
+
+            if (!string.IsNullOrEmpty(preferredId))
+            {
+                var preferred = endpoints.Find(e => string.Equals(e.Id, preferredId, StringComparison.OrdinalIgnoreCase));
+                if (preferred != null && Usable(preferred)) return preferred.Id;
+                Program.Log(preferred == null
+                    ? $"[AudioEndpointHelper] DSP output {preferredId} is not active -> auto-selecting"
+                    : $"[AudioEndpointHelper] DSP output '{preferred.Name}' is a virtual cable (feedback loop) -> auto-selecting");
+            }
+
+            return (endpoints.Find(e => e.IsG6 && Usable(e))
+                    ?? endpoints.Find(e => e.IsDefault && Usable(e))
+                    ?? endpoints.Find(Usable))?.Id;
         }
 
         public static (string? renderId, string? captureId) GetVirtualCableEndpoints()

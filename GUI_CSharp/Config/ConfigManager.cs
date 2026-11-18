@@ -88,6 +88,11 @@ namespace GUI.Config
         [JsonPropertyName("affect_game_monitor_only")]
         public bool AffectGameMonitorOnly { get; set; } = false;
 
+        // Exe whose audio output we routed to the Virtual Cable and could not reset yet. Windows persists that
+        // per-app choice past the process, so without this the game would stay silent once this app is gone.
+        [JsonPropertyName("audio_routed_exe")]
+        public string? AudioRoutedExe { get; set; } = null;
+
         [JsonPropertyName("goodbyedpi_mode")]
         public string GoodbyeDpiMode { get; set; } = "git_safe_reverse";
 

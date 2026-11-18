@@ -793,7 +793,8 @@ namespace GUI.Forms
         private void RefreshAudioEndpoints()
         {
             _cmbOutputDevice.Items.Clear();
-            _audioEndpoints = GUI.Engine.Audio.AudioEndpointHelper.GetRenderEndpoints();
+            // The cable's playback side is the DSP input, so it can never be the DSP output (feedback loop)
+            _audioEndpoints = GUI.Engine.Audio.AudioEndpointHelper.GetRenderEndpoints().FindAll(e => !e.IsVirtualCable);
 
             int selectedIndex = -1;
             int g6Index = -1;
