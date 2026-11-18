@@ -81,6 +81,16 @@ namespace GUI.Config
         [JsonPropertyName("sound_lock_eq_cut_rumble")]
         public bool SoundLockEqCutRumble { get; set; } = true;
 
+        // Reverb cut (transient shaper, before the limiter): shortens sound tails by up to sustain dB, lifts onsets
+        [JsonPropertyName("sound_lock_shaper_enabled")]
+        public bool SoundLockShaperEnabled { get; set; } = false;
+
+        [JsonPropertyName("sound_lock_shaper_sustain_db")]
+        public int SoundLockShaperSustainDb { get; set; } = 6;
+
+        [JsonPropertyName("sound_lock_shaper_attack_db")]
+        public int SoundLockShaperAttackDb { get; set; } = 0;
+
         [JsonPropertyName("sound_lock_output_device_id")]
         public string? SoundLockOutputDeviceId { get; set; } = null;
     }

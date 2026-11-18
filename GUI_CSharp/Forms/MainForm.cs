@@ -1038,7 +1038,7 @@ namespace GUI.Forms
 
         // Sound Lock: a ceiling on the game's peaks through a short lookahead buffer (game -> Virtual Cable -> limiter
         // -> DAC), so the gain is already down when a gunshot plays, plus the game master volume while it is in front.
-        // Nothing else: no boost, no EQ, no loudness.
+        // Optional per profile: footstep EQ and reverb cut (transient shaper), both before the limiter. No loudness.
         //
         // - The limiter and the routing live as long as the game PROCESS (alt-tab only switches the volume), so the
         //   game's audio stream is not moved back and forth on every focus change.
@@ -1073,7 +1073,8 @@ namespace GUI.Forms
             int lookaheadMs = prof.SoundLockLookaheadMs > 0 ? prof.SoundLockLookaheadMs : 5;
 
             var eq = new FootstepEqSettings(prof.SoundLockEqEnabled, prof.SoundLockEqPresenceDb, prof.SoundLockEqCutRumble);
-            if (!EnsureLimiter(exe, pid, prof.SoundLockOutputDeviceId, ceiling, lookaheadMs, eq))
+            var shaper = new TransientShaperSettings(prof.SoundLockShaperEnabled, prof.SoundLockShaperAttackDb, prof.SoundLockShaperSustainDb);
+            if (!EnsureLimiter(exe, pid, prof.SoundLockOutputDeviceId, ceiling, lookaheadMs, eq, shaper))
             {
                 // No ceiling possible -> no raised volume either; the game plays as if Sound Lock were off
                 StopSoundLock(keepRoutingMarker: false);
@@ -1086,7 +1087,8 @@ namespace GUI.Forms
             CheckGameAudioPath();
         }
 
-        private bool EnsureLimiter(string exe, int pid, string? preferredOutputId, float ceiling, int lookaheadMs, FootstepEqSettings eq)
+        private bool EnsureLimiter(string exe, int pid, string? preferredOutputId, float ceiling, int lookaheadMs, FootstepEqSettings eq,
+            TransientShaperSettings shaper)
         {
             if (_dspFaulted) return false;
 
@@ -1105,7 +1107,7 @@ namespace GUI.Forms
 
             // Pipeline first, routing second: the game must never land in a cable nobody reads.
             // Same devices -> only the ceiling is updated live, no restart.
-            if (!_lookaheadDspEngine.Start(cableCaptureId!, outputId, ceiling, lookaheadMs, eq))
+            if (!_lookaheadDspEngine.Start(cableCaptureId!, outputId, ceiling, lookaheadMs, eq, shaper))
             {
                 Program.Log("[AudioRouting] Lookahead pipeline could not start -> Sound Lock inactive.");
                 return false;

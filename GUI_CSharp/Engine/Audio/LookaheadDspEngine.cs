@@ -6,8 +6,9 @@ namespace GUI.Engine.Audio
 {
     /// <summary>
     /// Game audio -> Virtual Cable -> this pipeline -> physical output (headset / speakers / DAC).
-    /// The only processing is <see cref="LookaheadLimiter"/>: a short delay so the gain is already down when a gunshot
-    /// arrives. No boost, no EQ, no loudness. A small FIFO absorbs the 10 ms capture packets, and one frame is dropped or
+    /// Processing: optional <see cref="FootstepEq"/> and <see cref="TransientShaper"/> (reverb cut), both off by default
+    /// and without added delay, then <see cref="LookaheadLimiter"/>: a short delay so the gain is already down when a
+    /// gunshot arrives. No loudness. A small FIFO absorbs the 10 ms capture packets, and one frame is dropped or
     /// repeated now and then to follow the clock difference between the cable and the DAC (inaudible, no crackle).
     /// </summary>
     public sealed class LookaheadDspEngine : IDisposable
@@ -57,6 +58,8 @@ namespace GUI.Engine.Audio
         private volatile LookaheadLimiter? _limiter;
         private volatile FootstepEq? _eq;
         private FootstepEqSettings _eqSettings = FootstepEqSettings.Off;
+        private volatile TransientShaper? _shaper;
+        private TransientShaperSettings _shaperSettings = TransientShaperSettings.Off;
 
         private ManualResetEventSlim? _ready;
         private volatile bool _initOk;
@@ -71,7 +74,8 @@ namespace GUI.Engine.Audio
         /// never routes the game into a cable nobody reads. Calling it again with the same devices only updates the
         /// ceiling live (no restart, no gap).
         /// </summary>
-        public bool Start(string captureDeviceId, string renderDeviceId, float ceiling, int lookaheadMs, FootstepEqSettings eq)
+        public bool Start(string captureDeviceId, string renderDeviceId, float ceiling, int lookaheadMs, FootstepEqSettings eq,
+            TransientShaperSettings shaper)
         {
             lock (_lock)
             {
@@ -87,6 +91,8 @@ namespace GUI.Engine.Audio
                     _limiter?.SetParameters(ceiling, ReleaseMs);
                     _eqSettings = eq;
                     _eq?.SetSettings(eq);
+                    _shaperSettings = shaper;
+                    _shaper?.SetSettings(shaper);
                     return true;
                 }
 
@@ -97,6 +103,7 @@ namespace GUI.Engine.Audio
                 _lookaheadMs = lookaheadMs;
                 _ceiling = ceiling;
                 _eqSettings = eq;
+                _shaperSettings = shaper;
                 _initOk = false;
                 _ready = new ManualResetEventSlim(false);
 
@@ -122,7 +129,7 @@ namespace GUI.Engine.Audio
                     return false;
                 }
 
-                Program.Log($"[LookaheadDsp] Started (capture={captureDeviceId}, render={renderDeviceId}, ceiling={ceiling:P0}, lookahead={lookaheadMs}ms, hold={HoldMs}ms, release={ReleaseMs}ms, footstep EQ={(eq.Enabled ? $"+{eq.PresenceDb}dB{(eq.CutRumble ? " rumble cut" : "")}" : "off")})");
+                Program.Log($"[LookaheadDsp] Started (capture={captureDeviceId}, render={renderDeviceId}, ceiling={ceiling:P0}, lookahead={lookaheadMs}ms, hold={HoldMs}ms, release={ReleaseMs}ms, footstep EQ={(eq.Enabled ? $"+{eq.PresenceDb}dB{(eq.CutRumble ? " rumble cut" : "")}" : "off")}, reverb cut={(shaper.Enabled ? $"-{shaper.SustainCutDb}dB tail, +{shaper.AttackDb}dB attack" : "off")})");
                 return true;
             }
         }
@@ -143,6 +150,7 @@ namespace GUI.Engine.Audio
             _thread = null;
             _limiter = null;
             _eq = null;
+            _shaper = null;
             _ready?.Dispose();
             _ready = null;
 
@@ -246,6 +254,9 @@ namespace GUI.Engine.Audio
                 // Footstep EQ before the limiter: whatever it lifts, the ceiling still holds
                 var eqFilter = new FootstepEq(ch, rate, _eqSettings);
                 _eq = eqFilter;
+                // Reverb cut after the EQ (it measures what is actually heard), before the limiter (ceiling still holds)
+                var shaperFilter = new TransientShaper(ch, rate, _shaperSettings);
+                _shaper = shaperFilter;
 
                 var fifo = new float[rate * ch]; // 1 s
                 int fifoCapFrames = rate;
@@ -303,6 +314,7 @@ namespace GUI.Engine.Audio
                         captureService.ReleaseBuffer(numFrames);
 
                         eqFilter.Process(scratch.AsSpan(0, samples));
+                        shaperFilter.Process(scratch.AsSpan(0, samples));
                         limiter.Process(scratch.AsSpan(0, samples));
 
                         // Push; on overflow the oldest audio goes (only if the DAC stalled for a full second)

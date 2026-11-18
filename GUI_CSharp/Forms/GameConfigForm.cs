@@ -46,6 +46,12 @@ namespace GUI.Forms
         private CheckBox _chkEqRumble;
         private Label _lblEqVal;
         private TrackBar _tbEq;
+        private CheckBox _chkShaper;
+        private Label _lblShaperVal;
+        private TrackBar _tbShaper;
+        private Label _lblShaperAttack;
+        private NumericUpDown _numShaperAttack;
+        private Label _lblShaperAttackUnit;
 
         // Output Device & Virtual Audio Cable routing controls
         private Label _lblOutputDevicePrompt;
@@ -122,7 +128,7 @@ namespace GUI.Forms
 
             // Both columns end at the same Y; the bottom bar sits below them
             const int trackH = 32; // TrackBar ignores Size.Height unless AutoSize = false (default 45px overlaps the next row)
-            int soundLockH = isCs2 ? 526 : 450;
+            int soundLockH = isCs2 ? 554 : 478;
             int columnBottom = 12 + soundLockH;
             int separatorY = columnBottom + 10;
             int btnY = separatorY + 10;
@@ -497,29 +503,22 @@ namespace GUI.Forms
                 _lblLimitVal.Text = $"{_tbLimit.Value}%";
             };
 
-            // Footstep clarity EQ: lifts the 3 kHz footstep band and trims rumble / mud, so footsteps stand out without
-            // raising everything with the master volume
+            // Left half: footstep clarity EQ (lifts the 3 kHz footstep band, trims rumble / mud).
+            // Right half: reverb cut (transient shaper: shortens every sound's tail, can lift its onset).
+            // Side by side so the dialog stays short enough for 1080p at 150 % scaling.
             _chkEq = new CheckBox
             {
-                Text = "Footstep clarity EQ",
+                Text = "Footstep EQ",
                 Location = new Point(12, 192),
                 AutoSize = true
             };
             _chkEq.CheckedChanged += (s, e) => UpdateSoundLockControlsEnabled();
 
-            _chkEqRumble = new CheckBox
-            {
-                Text = "Cut rumble",
-                Location = new Point(156, 192),
-                AutoSize = true,
-                Checked = true
-            };
-
             _lblEqVal = new Label
             {
                 Text = "+4 dB",
-                Location = new Point(246, 190),
-                Size = new Size(70, 20),
+                Location = new Point(110, 190),
+                Size = new Size(50, 20),
                 TextAlign = ContentAlignment.MiddleRight,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
             };
@@ -532,14 +531,74 @@ namespace GUI.Forms
                 TickFrequency = 1,
                 AutoSize = false,
                 Location = new Point(10, 212),
-                Size = new Size(308, trackH)
+                Size = new Size(152, trackH)
             };
             _tbEq.ValueChanged += (s, e) => _lblEqVal.Text = $"+{_tbEq.Value} dB";
+
+            _chkEqRumble = new CheckBox
+            {
+                Text = "Cut rumble",
+                Location = new Point(12, 248),
+                AutoSize = true,
+                Checked = true
+            };
+
+            _chkShaper = new CheckBox
+            {
+                Text = "Reverb cut",
+                Location = new Point(168, 192),
+                AutoSize = true
+            };
+            _chkShaper.CheckedChanged += (s, e) => UpdateSoundLockControlsEnabled();
+
+            _lblShaperVal = new Label
+            {
+                Text = "-6 dB",
+                Location = new Point(266, 190),
+                Size = new Size(50, 20),
+                TextAlign = ContentAlignment.MiddleRight,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point)
+            };
+
+            _tbShaper = new TrackBar
+            {
+                Minimum = 0,
+                Maximum = (int)GUI.Engine.Audio.TransientShaper.MaxSustainCutDb,
+                Value = 6,
+                TickFrequency = 2,
+                AutoSize = false,
+                Location = new Point(166, 212),
+                Size = new Size(152, trackH)
+            };
+            _tbShaper.ValueChanged += (s, e) => _lblShaperVal.Text = $"-{_tbShaper.Value} dB";
+
+            _lblShaperAttack = new Label
+            {
+                Text = "Onset lift:",
+                Location = new Point(168, 250),
+                AutoSize = true
+            };
+
+            _numShaperAttack = new NumericUpDown
+            {
+                Minimum = 0,
+                Maximum = (decimal)GUI.Engine.Audio.TransientShaper.MaxAttackDb,
+                Value = 0,
+                Location = new Point(240, 247),
+                Size = new Size(46, 23)
+            };
+
+            _lblShaperAttackUnit = new Label
+            {
+                Text = "dB",
+                Location = new Point(290, 250),
+                AutoSize = true
+            };
 
             _chkBalanceApps = new CheckBox
             {
                 Text = "Keep other apps (Discord) at desktop loudness",
-                Location = new Point(12, 252),
+                Location = new Point(12, 280),
                 Size = new Size(304, 20),
                 Checked = true
             };
@@ -547,7 +606,7 @@ namespace GUI.Forms
             // Audio Routing Separator
             var pnlAudioSep = new Panel
             {
-                Location = new Point(10, 296),
+                Location = new Point(10, 324),
                 Size = new Size(308, 1),
                 BackColor = Color.FromArgb(226, 232, 240)
             };
@@ -555,7 +614,7 @@ namespace GUI.Forms
             _lblOutputDevicePrompt = new Label
             {
                 Text = "Output Device (DAC / Headset):",
-                Location = new Point(12, 304),
+                Location = new Point(12, 332),
                 Size = new Size(304, 18),
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold, GraphicsUnit.Point),
                 ForeColor = Color.FromArgb(30, 58, 138)
@@ -563,7 +622,7 @@ namespace GUI.Forms
 
             _cmbOutputDevice = new ComboBox
             {
-                Location = new Point(10, 324),
+                Location = new Point(10, 352),
                 Size = new Size(308, 24),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
@@ -572,7 +631,7 @@ namespace GUI.Forms
             _lblCableStatus = new Label
             {
                 Text = "Checking Virtual Cable...",
-                Location = new Point(12, 356),
+                Location = new Point(12, 384),
                 Size = new Size(202, 26),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point)
@@ -581,7 +640,7 @@ namespace GUI.Forms
             _btnSetupCable = new Button
             {
                 Text = "Setup Cable",
-                Location = new Point(216, 355),
+                Location = new Point(216, 383),
                 Size = new Size(102, 28),
                 BackColor = Color.White,
                 FlatStyle = FlatStyle.System,
@@ -611,6 +670,12 @@ namespace GUI.Forms
             gbSoundLock.Controls.Add(_chkEqRumble);
             gbSoundLock.Controls.Add(_lblEqVal);
             gbSoundLock.Controls.Add(_tbEq);
+            gbSoundLock.Controls.Add(_chkShaper);
+            gbSoundLock.Controls.Add(_lblShaperVal);
+            gbSoundLock.Controls.Add(_tbShaper);
+            gbSoundLock.Controls.Add(_lblShaperAttack);
+            gbSoundLock.Controls.Add(_numShaperAttack);
+            gbSoundLock.Controls.Add(_lblShaperAttackUnit);
             gbSoundLock.Controls.Add(_chkBalanceApps);
             gbSoundLock.Controls.Add(pnlAudioSep);
             gbSoundLock.Controls.Add(_lblOutputDevicePrompt);
@@ -623,7 +688,7 @@ namespace GUI.Forms
                 // CS2 Extra Height: Professional Hardware Protection & Status Panel
                 var pnlDacInfo = new Panel
                 {
-                    Location = new Point(10, 390),
+                    Location = new Point(10, 418),
                     Size = new Size(308, 126),
                     BackColor = Color.FromArgb(238, 242, 248),
                     BorderStyle = BorderStyle.FixedSingle
@@ -660,7 +725,7 @@ namespace GUI.Forms
 
                 var lblDac3 = new Label
                 {
-                    Text = "• Below the ceiling: untouched unless EQ is on",
+                    Text = "• Below ceiling: untouched unless EQ / reverb cut",
                     Location = new Point(8, 68),
                     Size = new Size(290, 16),
                     Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point),
@@ -698,7 +763,7 @@ namespace GUI.Forms
             {
                 var pnlDacInfo = new Panel
                 {
-                    Location = new Point(10, 390),
+                    Location = new Point(10, 418),
                     Size = new Size(308, 50),
                     BackColor = Color.FromArgb(238, 242, 248),
                     BorderStyle = BorderStyle.FixedSingle
@@ -828,6 +893,14 @@ namespace GUI.Forms
             _chkEqRumble.Enabled = eqOn;
             _lblEqVal.Enabled = eqOn;
             _tbEq.Enabled = eqOn;
+
+            _chkShaper.Enabled = masterOn;
+            bool shaperOn = masterOn && _chkShaper.Checked;
+            _lblShaperVal.Enabled = shaperOn;
+            _tbShaper.Enabled = shaperOn;
+            _lblShaperAttack.Enabled = shaperOn;
+            _numShaperAttack.Enabled = shaperOn;
+            _lblShaperAttackUnit.Enabled = shaperOn;
 
             _lblOutputDevicePrompt.Enabled = masterOn;
             _cmbOutputDevice.Enabled = masterOn;
@@ -970,6 +1043,12 @@ namespace GUI.Forms
             int eqDb = Math.Clamp(_profile.SoundLockEqPresenceDb, 0, 8);
             _tbEq.Value = eqDb;
             _lblEqVal.Text = $"+{eqDb} dB";
+
+            _chkShaper.Checked = _profile.SoundLockShaperEnabled;
+            int tailDb = Math.Clamp(_profile.SoundLockShaperSustainDb, _tbShaper.Minimum, _tbShaper.Maximum);
+            _tbShaper.Value = tailDb;
+            _lblShaperVal.Text = $"-{tailDb} dB";
+            _numShaperAttack.Value = Math.Clamp(_profile.SoundLockShaperAttackDb, (int)_numShaperAttack.Minimum, (int)_numShaperAttack.Maximum);
 
             RefreshAudioEndpoints();
             UpdateSoundLockControlsEnabled();
@@ -1264,6 +1343,9 @@ namespace GUI.Forms
                 SoundLockEqEnabled = _chkEq.Checked,
                 SoundLockEqPresenceDb = _tbEq.Value,
                 SoundLockEqCutRumble = _chkEqRumble.Checked,
+                SoundLockShaperEnabled = _chkShaper.Checked,
+                SoundLockShaperSustainDb = _tbShaper.Value,
+                SoundLockShaperAttackDb = (int)_numShaperAttack.Value,
                 SoundLockFastRecovery = true, // release is fixed at the shortest clean value
                 SoundLockLookaheadMs = 5,
                 SoundLockOutputDeviceId = outDevId
