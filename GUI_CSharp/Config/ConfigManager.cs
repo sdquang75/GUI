@@ -46,53 +46,6 @@ namespace GUI.Config
 
         [JsonPropertyName("cs2_antiflash_max_dim")]
         public int Cs2AntiFlashMaxDim { get; set; } = 100;
-
-        [JsonPropertyName("sound_lock_enabled")]
-        public bool SoundLockEnabled { get; set; } = false;
-
-        [JsonPropertyName("sound_lock_game_volume")]
-        public int SoundLockGameVolume { get; set; } = 70;
-
-        [JsonPropertyName("sound_lock_threshold")]
-        public int SoundLockThreshold { get; set; } = 40;
-
-        [JsonPropertyName("sound_lock_balance_external_apps")]
-        public bool SoundLockBalanceExternalApps { get; set; } = true;
-
-        [JsonPropertyName("sound_lock_fast_recovery")]
-        public bool SoundLockFastRecovery { get; set; } = true;
-
-        [JsonPropertyName("sound_lock_mode")]
-        public string SoundLockMode { get; set; } = "dsp_lookahead";
-
-        [JsonPropertyName("sound_lock_boost_db")]
-        public int SoundLockBoostDb { get; set; } = 0; // no longer applied (kept so old configs load)
-
-        [JsonPropertyName("sound_lock_lookahead_ms")]
-        public int SoundLockLookaheadMs { get; set; } = 5;
-
-        // Footstep clarity EQ (before the limiter): rumble cut, mud cut, +presence dB around 3 kHz
-        [JsonPropertyName("sound_lock_eq_enabled")]
-        public bool SoundLockEqEnabled { get; set; } = false;
-
-        [JsonPropertyName("sound_lock_eq_presence_db")]
-        public int SoundLockEqPresenceDb { get; set; } = 4;
-
-        [JsonPropertyName("sound_lock_eq_cut_rumble")]
-        public bool SoundLockEqCutRumble { get; set; } = true;
-
-        // Reverb cut (transient shaper, before the limiter): shortens sound tails by up to sustain dB, lifts onsets
-        [JsonPropertyName("sound_lock_shaper_enabled")]
-        public bool SoundLockShaperEnabled { get; set; } = false;
-
-        [JsonPropertyName("sound_lock_shaper_sustain_db")]
-        public int SoundLockShaperSustainDb { get; set; } = 6;
-
-        [JsonPropertyName("sound_lock_shaper_attack_db")]
-        public int SoundLockShaperAttackDb { get; set; } = 0;
-
-        [JsonPropertyName("sound_lock_output_device_id")]
-        public string? SoundLockOutputDeviceId { get; set; } = null;
     }
 
     public class AppConfig
@@ -107,11 +60,6 @@ namespace GUI.Config
         // window is on, every other screen keeps the desktop look. Off = every monitor (1.1.3 behavior).
         [JsonPropertyName("affect_game_monitor_only")]
         public bool AffectGameMonitorOnly { get; set; } = false;
-
-        // Exe whose audio output we routed to the Virtual Cable and could not reset yet. Windows persists that
-        // per-app choice past the process, so without this the game would stay silent once this app is gone.
-        [JsonPropertyName("audio_routed_exe")]
-        public string? AudioRoutedExe { get; set; } = null;
 
         [JsonPropertyName("goodbyedpi_mode")]
         public string GoodbyeDpiMode { get; set; } = "git_safe_reverse";

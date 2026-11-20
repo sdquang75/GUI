@@ -141,16 +141,6 @@ namespace GUI
                 return;
             }
 
-            if (args.Length > 0 && args[0] == "--dsp-selftest")
-            {
-                // Offline DSP checks on synthetic signals; opens no audio device, plays nothing
-                string outDir = args.Length > 1 ? args[1] : ".";
-                var (passed, report) = Engine.Audio.DspSelfTest.Run();
-                File.WriteAllText(Path.Combine(outDir, "dsp_selftest.txt"), report);
-                Environment.Exit(passed ? 0 : 1);
-                return;
-            }
-
             if (args.Length > 0 && args[0] == "--test")
             {
                 AttachConsole(-1);
