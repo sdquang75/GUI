@@ -184,7 +184,7 @@ namespace GUI.Forms
 
         private void InitializeComponent()
         {
-            this.Text = "GUI 1.1.4 - Vibrance & QuickRes";
+            this.Text = "GUI 1.1.5 - Vibrance & QuickRes";
             this.ClientSize = new Size(722, 500);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -355,7 +355,7 @@ namespace GUI.Forms
 
             _lblObserverStatus = new Label
             {
-                Text = $"Running! [{_vibrance.EngineName}]",
+                Text = EngineStatusText(),
                 Location = new Point(pad + 95, 466),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
@@ -449,7 +449,7 @@ namespace GUI.Forms
             // System Tray
             // ==========================================
             var trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("Open GUI 1.1.4", null, (s, e) => RestoreFromTray());
+            trayMenu.Items.Add("Open GUI 1.1.5", null, (s, e) => RestoreFromTray());
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Exit", null, (s, e) =>
             {
@@ -459,7 +459,7 @@ namespace GUI.Forms
 
             _notifyIcon = new NotifyIcon
             {
-                Text = "GUI 1.1.4",
+                Text = "GUI 1.1.5",
                 Icon = this.Icon,
                 ContextMenuStrip = trayMenu,
                 Visible = true
@@ -1084,10 +1084,18 @@ namespace GUI.Forms
 
         // "CS2 GSI Active" follows the live connection. It used to be set only when a profile was applied, which is
         // usually before CS2 sends its first packet, so it rarely showed. Refreshed by _statusLabelTimer while visible.
+        // Vibrance and gamma pick their path separately (e.g. a laptop panel on the Intel iGPU: vibrance through DWM,
+        // gamma / black flash through the Intel LUT), so both are shown
+        private string EngineStatusText()
+        {
+            string gamma = _gammaEngine.ActiveMode == GammaPipelineMode.DwmCompositor ? "DWM" : "LUT";
+            return $"Running! [Vibrance: {_vibrance.EngineName} | Gamma: {gamma}]";
+        }
+
         private void UpdateObserverStatus()
         {
             if (this.IsDisposed || _isCleanedUp) return;
-            string text = $"Running! [{_vibrance.EngineName}]";
+            string text = EngineStatusText();
             if (_gsiListener.IsCs2Connected) text += " • CS2 GSI Active";
             if (_lblObserverStatus.Text != text) _lblObserverStatus.Text = text;
             _lblObserverStatus.ForeColor = Color.FromArgb(22, 163, 74);
