@@ -25,6 +25,7 @@ namespace GUI.Engine
         public double Gamma;
         public double BlackBoost;
         public double Contrast;
+        public bool EnhancedBoost;
         public RAMP Ramp;
     }
 
@@ -62,6 +63,12 @@ namespace GUI.Engine
         private readonly double[] _cachedBaseCurve = new double[256];
         private double _cachedCurveGamma = -1.0;
         private double _cachedCurveBoost = -1.0;
+        private bool _cachedCurveEnhanced;
+
+        // Black Boost shape (see BlackBoostCurve). Kept across ApplyContrast calls,
+        // so a black flash dims the same curve the profile applied.
+        private bool _enhancedBoost;
+        public bool EnhancedBoost => _enhancedBoost;
 
         // Smaller than one GSI flashed step (1/255), so every real change is still applied
         private const double ContrastEpsilon = 0.001;
@@ -200,25 +207,30 @@ namespace GUI.Engine
 
         private void EnsureBaseCurve(double gamma, double blackBoost)
         {
-            if (Math.Abs(_cachedCurveGamma - gamma) < 0.0001 && Math.Abs(_cachedCurveBoost - blackBoost) < 0.0001)
+            if (Math.Abs(_cachedCurveGamma - gamma) < 0.0001 && Math.Abs(_cachedCurveBoost - blackBoost) < 0.0001 &&
+                _cachedCurveEnhanced == _enhancedBoost)
             {
                 return;
             }
 
-            double baseP = gamma / 2.20;
             for (int i = 0; i < 256; i++)
             {
-                double x = i / 255.0;
-                double yGamma = x > 0 ? Math.Pow(x, baseP) : 0.0;
-                double lift = (x > 0 && blackBoost > 0)
-                    ? Math.Pow(1.0 - x, 4) * x * 3.8 * blackBoost
-                    : 0.0;
-                _cachedBaseCurve[i] = yGamma + lift;
+                _cachedBaseCurve[i] = BlackBoostCurve.Evaluate(i / 255.0, gamma, blackBoost, _enhancedBoost);
             }
 
             _cachedCurveGamma = gamma;
             _cachedCurveBoost = blackBoost;
+            _cachedCurveEnhanced = _enhancedBoost;
             _rejectedContrastCeiling = -1.0;
+        }
+
+        /// <summary>Picks the Black Boost shape for the next ApplyCurve (it does not rewrite the LUT by itself).</summary>
+        public void SetEnhancedBoost(bool enhanced)
+        {
+            lock (_lock)
+            {
+                _enhancedBoost = enhanced;
+            }
         }
 
         private const int SM_CMONITORS = 80;
@@ -622,6 +634,7 @@ namespace GUI.Engine
                     Gamma = _lastGamma,
                     BlackBoost = _lastBlackBoost,
                     Contrast = _lastContrast,
+                    EnhancedBoost = _enhancedBoost,
                     Ramp = _lastAppliedRamp
                 };
             }
@@ -632,6 +645,7 @@ namespace GUI.Engine
             lock (_lock)
             {
                 if (_isDisposed) return;
+                _enhancedBoost = state.EnhancedBoost;
 
                 if (state.WasActive)
                 {

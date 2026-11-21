@@ -38,6 +38,21 @@ namespace GUI.Config
         [JsonPropertyName("boost")]
         public int Boost { get; set; } = 0;
 
+        // Black Boost curve (BlackBoostCurve): false = Classic (contrast taken back evenly above the shadows),
+        // true = Enhanced (taken mostly from the sky / lamps, midtones keep more). Curve only: vibrance stays as set.
+        [JsonPropertyName("boost_enhanced")]
+        public bool BoostEnhanced { get; set; } = false;
+
+        // Read-only migration of the short-lived 3-way "boost_curve" picker (2026-11-21): its "Shoulder" is today's
+        // Enhanced, its "Enhanced" is today's Classic, and its "Classic" curve no longer exists. Never written back.
+        [JsonPropertyName("boost_curve")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? LegacyBoostCurve
+        {
+            get => null;
+            set { if (string.Equals(value, "Shoulder", StringComparison.OrdinalIgnoreCase)) BoostEnhanced = true; }
+        }
+
         [JsonPropertyName("cs2_antiflash_enabled")]
         public bool Cs2AntiFlashEnabled { get; set; } = true;
 
@@ -46,6 +61,9 @@ namespace GUI.Config
 
         [JsonPropertyName("cs2_antiflash_max_dim")]
         public int Cs2AntiFlashMaxDim { get; set; } = 100;
+
+        // Every field (all value types / strings), so callers never drop a setting by copying field by field
+        public GameProfile Clone() => (GameProfile)MemberwiseClone();
     }
 
     public class AppConfig

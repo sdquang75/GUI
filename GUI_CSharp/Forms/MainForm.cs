@@ -746,20 +746,8 @@ namespace GUI.Forms
 
                 if (existing != null)
                 {
-                    initialProfile = new GameProfile
-                    {
-                        Name = existing.Name,
-                        Path = !string.IsNullOrEmpty(dlg.SelectedPath) ? dlg.SelectedPath : existing.Path,
-                        VibranceEnabled = existing.VibranceEnabled,
-                        Vibrance = existing.Vibrance,
-                        GammaEnabled = existing.GammaEnabled,
-                        Gamma = existing.Gamma,
-                        BoostEnabled = existing.BoostEnabled,
-                        Boost = existing.Boost,
-                        Cs2AntiFlashEnabled = existing.Cs2AntiFlashEnabled,
-                        Cs2AntiSmokeEnabled = existing.Cs2AntiSmokeEnabled,
-                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim
-                    };
+                    initialProfile = existing.Clone();
+                    if (!string.IsNullOrEmpty(dlg.SelectedPath)) initialProfile.Path = dlg.SelectedPath;
                 }
                 else
                 {
@@ -815,20 +803,8 @@ namespace GUI.Forms
 
                 if (existing != null)
                 {
-                    initialProfile = new GameProfile
-                    {
-                        Name = existing.Name,
-                        Path = ofd.FileName,
-                        VibranceEnabled = existing.VibranceEnabled,
-                        Vibrance = existing.Vibrance,
-                        GammaEnabled = existing.GammaEnabled,
-                        Gamma = existing.Gamma,
-                        BoostEnabled = existing.BoostEnabled,
-                        Boost = existing.Boost,
-                        Cs2AntiFlashEnabled = existing.Cs2AntiFlashEnabled,
-                        Cs2AntiSmokeEnabled = existing.Cs2AntiSmokeEnabled,
-                        Cs2AntiFlashMaxDim = existing.Cs2AntiFlashMaxDim
-                    };
+                    initialProfile = existing.Clone();
+                    initialProfile.Path = ofd.FileName;
                 }
                 else
                 {
@@ -996,6 +972,7 @@ namespace GUI.Forms
 
             double g = prof.GammaEnabled ? prof.Gamma : 2.20;
             double b = prof.BoostEnabled ? (prof.Boost / 100.0) : 0.0;
+            _gammaEngine.SetEnhancedBoost(prof.BoostEnhanced);
             if (string.Equals(exe, "cs2.exe", StringComparison.OrdinalIgnoreCase))
             {
                 // Re-applied mid-flash (focus / display change): keep the black flash dim instead of resetting it

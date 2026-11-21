@@ -29,6 +29,7 @@ namespace GUI.Forms
         private Label _lblGammaVal;
 
         private CheckBox _chkBoost;
+        private CheckBox _chkBoostEnhanced;
         private TrackBar _tbBoost;
         private Label _lblBoostVal;
 
@@ -242,6 +243,24 @@ namespace GUI.Forms
                 if (_isTesting) ApplyPreview();
             };
 
+            // Enhanced curve switch: toggle it while Test Preview runs to compare with Classic
+            _chkBoostEnhanced = new CheckBox
+            {
+                Text = "Enhanced",
+                Location = new Point(150, 24),
+                AutoSize = true
+            };
+            _chkBoostEnhanced.CheckedChanged += (s, e) =>
+            {
+                if (_isTesting) ApplyPreview();
+            };
+            new ToolTip().SetToolTip(_chkBoostEnhanced,
+                "Both lift the shadows the same; they differ in where the contrast is taken back.\n" +
+                "Unchecked (Classic): evenly above the shadows (0.86x everywhere at 35 %).\n" +
+                "Checked (Enhanced): mostly from the sky / lamps, so walls and models keep more\n" +
+                "(0.90x up to 0.85, sky 0.63x at 35 %). Curve only, vibrance stays as set.\n" +
+                "Toggle it during Test Preview to compare.");
+
             _lblBoostVal = new Label
             {
                 Text = "0%",
@@ -268,6 +287,7 @@ namespace GUI.Forms
             };
 
             gbBoost.Controls.Add(_chkBoost);
+            gbBoost.Controls.Add(_chkBoostEnhanced);
             gbBoost.Controls.Add(_lblBoostVal);
             gbBoost.Controls.Add(_tbBoost);
 
@@ -443,6 +463,7 @@ namespace GUI.Forms
         {
             bool enabled = _chkBoost.Checked;
             _tbBoost.Enabled = enabled;
+            _chkBoostEnhanced.Enabled = enabled;
             _lblBoostVal.ForeColor = enabled ? Color.Black : SystemColors.GrayText;
         }
 
@@ -465,6 +486,7 @@ namespace GUI.Forms
             UpdateGammaControlsEnabled();
 
             _chkBoost.Checked = _profile.BoostEnabled;
+            _chkBoostEnhanced.Checked = _profile.BoostEnhanced;
             _tbBoost.Value = Math.Clamp(_profile.Boost, 0, 100);
             _lblBoostVal.Text = $"{_tbBoost.Value}%";
             UpdateBoostControlsEnabled();
@@ -686,6 +708,7 @@ namespace GUI.Forms
                 ? DisplayTopology.GetMonitorOfWindow(this.IsHandleCreated ? this.Handle : IntPtr.Zero) ?? DisplayTopology.GetPrimaryName()
                 : null;
 
+            bool enhanced = _chkBoostEnhanced.Checked;
             if (_vibrance is UnifiedVibranceEngine unified)
             {
                 unified.Apply(_tbVibrance.Value, target);
@@ -702,6 +725,7 @@ namespace GUI.Forms
                 {
                     double g = _chkGamma.Checked ? (_tbGamma.Value / 100.0) : 2.20;
                     double b = _chkBoost.Checked ? (_tbBoost.Value / 100.0) : 0.0;
+                    _gammaEngine.SetEnhancedBoost(enhanced);
                     _gammaEngine.ApplyCurve(g, b);
                 }
                 else
@@ -750,6 +774,7 @@ namespace GUI.Forms
                 Gamma = Math.Round(_tbGamma.Value / 100.0, 2),
                 BoostEnabled = _chkBoost.Checked,
                 Boost = _tbBoost.Value,
+                BoostEnhanced = _chkBoostEnhanced.Checked,
                 Cs2AntiFlashEnabled = _chkAntiFlash?.Checked ?? _profile.Cs2AntiFlashEnabled,
                 Cs2AntiSmokeEnabled = false,
                 Cs2AntiFlashMaxDim = _tbMaxDim?.Value ?? _profile.Cs2AntiFlashMaxDim
